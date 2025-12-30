@@ -6,19 +6,24 @@
  * 
  * Setup Instructions:
  * 1. Copy the Estuary SDK into your project's Scripts folder
- * 2. Create an Audio Output asset and an Audio Input asset in Lens Studio
- * 3. Create a new TypeScript script and copy this code
- * 4. Configure the input properties in the Inspector
- * 5. Set your API key and character ID
+ * 2. Create an Audio Output asset in Lens Studio
+ * 3. Add "Audio From Microphone" asset:
+ *    - Asset Browser → "+" → Audio → Audio From Microphone
+ * 4. Create a new TypeScript script and copy this code
+ * 5. Configure the input properties in the Inspector
+ * 6. Set your API key and character ID
+ * 7. Grant microphone permissions in Preview (click mic icon)
  * 
- * Note: This example shows the SDK usage pattern for Lens Studio.
+ * IMPORTANT: Use "Audio From Microphone" asset for microphone input,
+ * NOT "Audio Track" asset. This provides MicrophoneAudioProvider which
+ * gives access to raw PCM audio data via getAudioFrame().
  */
 
 // Import from your local Estuary SDK folder
 // Adjust the path based on where you placed the SDK files
 import { EstuaryCharacter } from '../src/Components/EstuaryCharacter';
 import { EstuaryAudioPlayer, AudioOutputControl } from '../src/Components/EstuaryAudioPlayer';
-import { EstuaryMicrophone, AudioInputControl } from '../src/Components/EstuaryMicrophone';
+import { EstuaryMicrophone, MicrophoneAudioProvider } from '../src/Components/EstuaryMicrophone';
 import { EstuaryConfig } from '../src/Core/EstuaryConfig';
 import { ConnectionState } from '../src/Core/EstuaryEvents';
 import { SessionInfo } from '../src/Models/SessionInfo';
@@ -83,16 +88,18 @@ export class VoiceChatExample {
      * Initialize with Lens Studio audio controls.
      * Call this from your script's onAwake or similar lifecycle method.
      * @param audioOutput Audio output control from Lens Studio
-     * @param audioInput Audio input control from Lens Studio
+     * @param microphoneProvider MicrophoneAudioProvider from "Audio From Microphone" asset
      */
-    initialize(audioOutput: AudioOutputControl, audioInput?: AudioInputControl): void {
+    initialize(audioOutput: AudioOutputControl, microphoneProvider?: MicrophoneAudioProvider): void {
         // Configure audio player
         this.audioPlayer.setAudioOutput(audioOutput);
         this.audioPlayer.debugLogging = true;
 
         // Configure microphone if available
-        if (audioInput) {
-            this.microphone.setAudioInput(audioInput);
+        // IMPORTANT: Use MicrophoneAudioProvider from "Audio From Microphone" asset
+        if (microphoneProvider) {
+            this.microphone.setMicrophoneProvider(microphoneProvider);
+            this.microphone.streamImmediately = true;  // Low-latency streaming (default)
             this.microphone.debugLogging = true;
         }
 
@@ -268,7 +275,7 @@ export default VoiceChatExample;
 
 import { EstuaryCharacter } from './Estuary/Components/EstuaryCharacter';
 import { EstuaryAudioPlayer, AudioOutputControl } from './Estuary/Components/EstuaryAudioPlayer';
-import { EstuaryMicrophone, AudioInputControl } from './Estuary/Components/EstuaryMicrophone';
+import { EstuaryMicrophone, MicrophoneAudioProvider } from './Estuary/Components/EstuaryMicrophone';
 import { EstuaryConfig } from './Estuary/Core/EstuaryConfig';
 import { BotResponse } from './Estuary/Models/BotResponse';
 import { SttResponse } from './Estuary/Models/SttResponse';
@@ -281,8 +288,11 @@ export class EstuaryVoiceChat extends BaseScriptComponent {
     @input
     audioOutput: AudioTrackAsset;
     
+    // IMPORTANT: Use "Audio From Microphone" asset, NOT "Audio Track" asset!
+    // In Asset Browser: "+" → Audio → Audio From Microphone
     @input
-    audioInput: AudioTrackAsset;
+    @hint("Audio From Microphone asset (NOT Audio Track!)")
+    microphoneAudio: AudioTrackAsset;
     
     // === CONFIGURATION - REPLACE WITH YOUR VALUES ===
     private readonly SERVER_URL = 'https://api.estuary-ai.com';
@@ -306,10 +316,19 @@ export class EstuaryVoiceChat extends BaseScriptComponent {
             this.character.audioPlayer = this.audioPlayer;
         }
         
-        if (this.audioInput) {
+        // Set up microphone with MicrophoneAudioProvider
+        // This provides raw PCM access via getAudioFrame()
+        if (this.microphoneAudio) {
             this.microphone = new EstuaryMicrophone(this.character);
-            const inputControl = this.audioInput.control as AudioInputControl;
-            this.microphone.setAudioInput(inputControl);
+            // Get the audio provider from the Audio From Microphone asset
+            const audioProvider = (this.microphoneAudio as any).audioProvider as MicrophoneAudioProvider;
+            if (audioProvider) {
+                this.microphone.setMicrophoneProvider(audioProvider);
+            } else {
+                // Fallback
+                const control = (this.microphoneAudio as any).control;
+                if (control) this.microphone.setAudioInput(control);
+            }
             this.character.microphone = this.microphone;
         }
         

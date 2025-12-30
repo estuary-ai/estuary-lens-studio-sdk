@@ -80,25 +80,30 @@ character.sendText('Hello, how are you?');
 
 ### 4. Enable Voice Chat
 
+**RECOMMENDED**: Use `MicrophoneRecorder` from `RemoteServiceGateway.lspkg` (same as official Gemini example).
+
 ```typescript
 import { EstuaryAudioPlayer } from './Estuary/Components/EstuaryAudioPlayer';
-import { EstuaryMicrophone } from './Estuary/Components/EstuaryMicrophone';
+import { EstuaryMicrophone, MicrophoneRecorder } from './Estuary/Components/EstuaryMicrophone';
 
 // Set up audio player for voice responses
 const audioPlayer = new EstuaryAudioPlayer(audioOutputControl);
 character.audioPlayer = audioPlayer;
 
-// Set up microphone for voice input
+// Set up microphone for voice input using MicrophoneRecorder (RECOMMENDED)
+// MicrophoneRecorder uses EVENT-BASED audio delivery - works in simulator!
 const microphone = new EstuaryMicrophone(character);
-microphone.setAudioInput(audioInputControl);
+microphone.setMicrophoneRecorder(microphoneRecorder);
 character.microphone = microphone;
 
 // Start voice session
 character.startVoiceSession();
 
-// In your update loop
+// NOTE: No need to call processAudioFrame() when using MicrophoneRecorder!
+// Audio is delivered via events automatically.
+
+// For audio output playback, still need update loop:
 function onUpdate() {
-    microphone.processAudioFrame(1024);
     audioPlayer.processAudioFrame();
 }
 
@@ -106,31 +111,66 @@ function onUpdate() {
 character.endVoiceSession();
 ```
 
+**Setting up MicrophoneRecorder in Lens Studio (RECOMMENDED):**
+1. Import `RemoteServiceGateway.lspkg` into your project
+2. Add a `MicrophoneRecorder` SceneObject to your scene
+3. Assign it to your script's `@input microphoneRecorder` property
+4. The MicrophoneRecorder uses event-based audio delivery (works reliably!)
+
+**Alternative: Audio From Microphone asset (polling-based, less reliable):**
+1. In Asset Browser, click "+" → Audio → **Audio From Microphone**
+2. Assign this asset to your script's `@input microphoneAudio` property
+3. Call `microphone.processAudioFrame(1024)` in your update loop
+
 ## Complete Example
 
-See [Examples/VoiceChatExample.ts](Examples/VoiceChatExample.ts) for a complete implementation.
+See [Examples/SimpleAutoConnect.ts](Examples/SimpleAutoConnect.ts) for a complete implementation.
+
+**Lens Studio Setup (RECOMMENDED - using MicrophoneRecorder):**
+1. Import `RemoteServiceGateway.lspkg` into your project
+2. Add an InternetModule to your scene (required for WebSocket)
+3. Add a `MicrophoneRecorder` SceneObject (from RemoteServiceGateway)
+4. Add an Audio Track asset for output
 
 ```typescript
+import { EstuaryCharacter } from './Estuary/Components/EstuaryCharacter';
+import { EstuaryAudioPlayer } from './Estuary/Components/EstuaryAudioPlayer';
+import { EstuaryMicrophone, MicrophoneRecorder } from './Estuary/Components/EstuaryMicrophone';
+import { setInternetModule } from './Estuary/Core/EstuaryClient';
+
 @component
 export class MyLens extends BaseScriptComponent {
     @input audioOutput: AudioTrackAsset;
-    @input audioInput: AudioTrackAsset;
+    // RECOMMENDED: MicrophoneRecorder from RemoteServiceGateway.lspkg
+    @input microphoneRecorder: SceneObject;
+    @input internetModule: InternetModule;
     
     private character: EstuaryCharacter;
     private audioPlayer: EstuaryAudioPlayer;
     private microphone: EstuaryMicrophone;
     
     onAwake() {
+        // Set up InternetModule (required for WebSocket)
+        setInternetModule(this.internetModule);
+        
         // Create and configure components
         this.character = new EstuaryCharacter('char-id', 'player-id');
         this.audioPlayer = new EstuaryAudioPlayer(this.audioOutput.control);
+        
+        // Set up microphone with MicrophoneRecorder (EVENT-BASED - RECOMMENDED)
         this.microphone = new EstuaryMicrophone(this.character);
+        const recorder = (this.microphoneRecorder as any).api as MicrophoneRecorder;
+        this.microphone.setMicrophoneRecorder(recorder);
         
         // Connect components
         this.character.audioPlayer = this.audioPlayer;
         this.character.microphone = this.microphone;
         
         // Subscribe to events
+        this.character.on('connected', () => {
+            this.character.startVoiceSession();
+            this.microphone.startRecording();
+        });
         this.character.on('botResponse', (r) => print(`AI: ${r.text}`));
         
         // Initialize
@@ -143,7 +183,7 @@ export class MyLens extends BaseScriptComponent {
     }
     
     onUpdate() {
-        this.microphone.processAudioFrame(1024);
+        // Only need to process audio output - microphone uses events!
         this.audioPlayer.processAudioFrame();
     }
 }
@@ -184,12 +224,23 @@ Represents an AI character for conversations.
 
 Handles microphone input for voice chat.
 
+**RECOMMENDED**: Use `MicrophoneRecorder` from `RemoteServiceGateway.lspkg` for event-based audio delivery.
+
 | Property | Description |
 |----------|-------------|
 | `targetCharacter` | Character to send audio to |
 | `sampleRate` | Recording sample rate (16000) |
-| `chunkDurationMs` | Audio chunk size in ms |
+| `streamImmediately` | Send audio as received (default: true, lowest latency) |
+| `chunkDurationMs` | Audio chunk size in ms (used when streamImmediately=false) |
 | `vadThreshold` | Voice activity threshold |
+| `generateTestTone` | Generate 440Hz test tone instead of mic (for testing) |
+
+| Method | Description |
+|--------|-------------|
+| `setMicrophoneRecorder(recorder)` | Set MicrophoneRecorder (RECOMMENDED - event-based) |
+| `setMicrophoneProvider(provider)` | Set MicrophoneAudioProvider (polling-based fallback) |
+| `setAudioInput(control)` | Set audio input (legacy) |
+| `processAudioFrame(frameSize)` | Call every frame (not needed with MicrophoneRecorder) |
 
 ### EstuaryAudioPlayer
 

@@ -65,6 +65,9 @@ export class EstuaryCharacter
     /** Whether a voice session is currently active */
     private _isVoiceSessionActive: boolean = false;
 
+    /** Flag to log voice session warning only once */
+    private _voiceSessionWarningLogged: boolean = false;
+
     /** The current partial response being built (for streaming) */
     private _currentPartialResponse: string = '';
 
@@ -234,6 +237,7 @@ export class EstuaryCharacter
         }
 
         this._isVoiceSessionActive = true;
+        this._voiceSessionWarningLogged = false;  // Reset warning flag
         this._currentPartialResponse = '';
         this._currentMessageId = '';
 
@@ -264,7 +268,17 @@ export class EstuaryCharacter
      * @param audioBase64 Base64-encoded audio data
      */
     streamAudio(audioBase64: string): void {
-        if (!this._isConnected || !this._isVoiceSessionActive) {
+        if (!this._isConnected) {
+            // Only warn once per disconnected period
+            return;
+        }
+        
+        if (!this._isVoiceSessionActive) {
+            // Log warning once to help debugging
+            if (!this._voiceSessionWarningLogged) {
+                print('[EstuaryCharacter] ⚠️ Audio dropped: voice session not active! Call startVoiceSession() first.');
+                this._voiceSessionWarningLogged = true;
+            }
             return;
         }
 
