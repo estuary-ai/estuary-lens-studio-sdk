@@ -338,11 +338,41 @@ export class EstuaryClient extends EventEmitter<any> {
                 this.handleWebSocketOpen();
             };
             ws.onclose = (event: any) => {
-                this.log('WebSocket onclose fired');
+                // Log detailed close information
+                const code = event?.code || event?.closeCode || 'unknown';
+                const reason = event?.reason || event?.closeReason || 'no reason provided';
+                const wasClean = event?.wasClean !== undefined ? event.wasClean : 'unknown';
+                this.log(`WebSocket onclose fired - Code: ${code}, Reason: ${reason}, Clean: ${wasClean}`);
+                
+                // Log what close codes mean
+                const codeExplanation = this.getCloseCodeExplanation(code);
+                if (codeExplanation) {
+                    this.log(`Close code ${code} means: ${codeExplanation}`);
+                }
+                
                 this.handleWebSocketClose();
             };
             ws.onerror = (event: any) => {
-                this.log('WebSocket onerror fired');
+                // Try to extract error details
+                const errorMsg = event?.message || event?.error || event?.type || 'unknown error';
+                this.log(`WebSocket onerror fired - Details: ${errorMsg}`);
+                
+                // Log all properties of the error event for debugging
+                if (this._config.debugLogging) {
+                    const props: string[] = [];
+                    for (const key in event) {
+                        try {
+                            const val = event[key];
+                            if (typeof val !== 'function') {
+                                props.push(`${key}=${val}`);
+                            }
+                        } catch (e) {}
+                    }
+                    if (props.length > 0) {
+                        this.log(`Error event properties: ${props.join(', ')}`);
+                    }
+                }
+                
                 this.handleWebSocketError('WebSocket error');
             };
             ws.onmessage = (event: any) => {
@@ -734,6 +764,31 @@ export class EstuaryClient extends EventEmitter<any> {
         
         // Do NOT process next message here!
         // Wait for next frame/call to avoid Lens Studio WebSocket concatenation bug
+    }
+
+    /**
+     * Get human-readable explanation for WebSocket close codes
+     */
+    private getCloseCodeExplanation(code: number | string): string {
+        const codeNum = typeof code === 'string' ? parseInt(code, 10) : code;
+        switch (codeNum) {
+            case 1000: return 'Normal closure - connection completed successfully';
+            case 1001: return 'Going away - server shutting down or browser navigating away';
+            case 1002: return 'Protocol error - endpoint received malformed frame';
+            case 1003: return 'Unsupported data - received data type not supported';
+            case 1005: return 'No status received - no close code was provided';
+            case 1006: return 'Abnormal closure - connection dropped without close frame (network issue, server crash, or TLS failure)';
+            case 1007: return 'Invalid frame payload data - message contained inconsistent data';
+            case 1008: return 'Policy violation - message violates policy';
+            case 1009: return 'Message too big - message exceeded size limit';
+            case 1010: return 'Missing extension - client expected server to negotiate extension';
+            case 1011: return 'Internal error - server encountered unexpected condition';
+            case 1012: return 'Service restart - server is restarting';
+            case 1013: return 'Try again later - server is temporarily unavailable';
+            case 1014: return 'Bad gateway - server acting as gateway received invalid response';
+            case 1015: return 'TLS handshake failed - TLS/SSL certificate error';
+            default: return '';
+        }
     }
 
     private log(message: string): void {
