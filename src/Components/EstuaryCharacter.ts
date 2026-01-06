@@ -5,8 +5,9 @@
  * Usage:
  * 1. Create an instance of EstuaryCharacter
  * 2. Set characterId and playerId
- * 3. Subscribe to events (onBotResponse, onVoiceReceived, etc.)
- * 4. Call connect() to start the session
+ * 3. Subscribe to events (botResponse, voiceReceived, transcript, etc.)
+ * 4. Call initialize() with config to connect
+ * 5. Handle voice playback externally via 'voiceReceived' event
  */
 
 import { EstuaryManager, IEstuaryCharacterHandler } from './EstuaryManager';
@@ -35,6 +36,9 @@ export interface EstuaryCharacterEvents {
 /**
  * EstuaryCharacter - Represents an AI character for conversations.
  * Implements IEstuaryCharacterHandler to receive events from EstuaryManager.
+ * 
+ * Voice playback is handled externally - subscribe to 'voiceReceived' event
+ * and use DynamicAudioOutput from RemoteServiceGateway.lspkg.
  */
 export class EstuaryCharacter 
     extends EventEmitter<any> 
@@ -75,9 +79,6 @@ export class EstuaryCharacter
     private _currentMessageId: string = '';
 
     // ==================== References ====================
-
-    /** Audio player for voice playback */
-    private _audioPlayer: IEstuaryAudioPlayer | null = null;
 
     /** Microphone for voice input */
     private _microphone: IEstuaryMicrophoneController | null = null;
@@ -144,11 +145,6 @@ export class EstuaryCharacter
         return this._currentMessageId;
     }
 
-    /** Set the audio player for voice playback */
-    set audioPlayer(player: IEstuaryAudioPlayer | null) {
-        this._audioPlayer = player;
-    }
-
     /** Set the microphone for voice input */
     set microphone(mic: IEstuaryMicrophoneController | null) {
         this._microphone = mic;
@@ -202,14 +198,6 @@ export class EstuaryCharacter
      * @param message The message to send
      */
     sendText(message: string): void {
-        this.sendTextInternal(message);
-    }
-
-    /**
-     * Send a text message to this character (internal implementation).
-     * @param message The message to send
-     */
-    private sendTextInternal(message: string): void {
         if (!this._isConnected) {
             print(`[EstuaryCharacter] Cannot send text: not connected`);
             return;
@@ -237,7 +225,7 @@ export class EstuaryCharacter
         }
 
         this._isVoiceSessionActive = true;
-        this._voiceSessionWarningLogged = false;  // Reset warning flag
+        this._voiceSessionWarningLogged = false;
         this._currentPartialResponse = '';
         this._currentMessageId = '';
 
@@ -269,12 +257,10 @@ export class EstuaryCharacter
      */
     streamAudio(audioBase64: string): void {
         if (!this._isConnected) {
-            // Only warn once per disconnected period
             return;
         }
         
         if (!this._isVoiceSessionActive) {
-            // Log warning once to help debugging
             if (!this._voiceSessionWarningLogged) {
                 print('[EstuaryCharacter] ⚠️ Audio dropped: voice session not active! Call startVoiceSession() first.');
                 this._voiceSessionWarningLogged = true;
@@ -286,15 +272,13 @@ export class EstuaryCharacter
     }
 
     /**
-     * Interrupt the current response (stop playback).
+     * Signal that the current response should be interrupted.
+     * Emits 'interrupt' event - handle audio stopping externally.
      */
     interrupt(): void {
-        if (this._audioPlayer) {
-            this._audioPlayer.stopPlayback();
-        }
-
         this._currentPartialResponse = '';
         this._currentMessageId = '';
+        this.emit('interrupt', { reason: 'user_interrupt' });
     }
 
     /**
@@ -340,10 +324,8 @@ export class EstuaryCharacter
 
         // Handle streaming responses
         if (response.isFinal) {
-            // Final response - use full text
             this._currentPartialResponse = response.text;
         } else {
-            // Partial response - accumulate
             this._currentPartialResponse += response.text;
         }
 
@@ -351,13 +333,7 @@ export class EstuaryCharacter
     }
 
     handleBotVoice(voice: BotVoice): void {
-        // Play audio if we have an audio player
-        if (this._audioPlayer) {
-            this._audioPlayer.enqueueAudio(voice);
-        } else {
-            print('[EstuaryCharacter] No audioPlayer assigned - voice will not play!');
-        }
-
+        // Emit event for external handling (e.g., DynamicAudioOutput)
         this.emit('voiceReceived', voice);
     }
 
@@ -366,15 +342,8 @@ export class EstuaryCharacter
     }
 
     handleInterrupt(data: InterruptData): void {
-        // Stop current audio playback
-        if (this._audioPlayer) {
-            this._audioPlayer.stopPlayback();
-        }
-
-        // Clear current response state
         this._currentPartialResponse = '';
         this._currentMessageId = '';
-
         this.emit('interrupt', data);
     }
 
@@ -390,19 +359,10 @@ export class EstuaryCharacter
     // ==================== Private Methods ====================
 
     private generatePlayerId(): string {
-        // Generate a random player ID
         const timestamp = Date.now().toString(36);
         const random = Math.random().toString(36).substring(2, 10);
         return `player_${timestamp}_${random}`;
     }
-}
-
-/**
- * Interface for audio player that can play bot voice.
- */
-export interface IEstuaryAudioPlayer {
-    enqueueAudio(voice: BotVoice): void;
-    stopPlayback(): void;
 }
 
 /**
@@ -412,8 +372,3 @@ export interface IEstuaryMicrophoneController {
     startRecording(): void;
     stopRecording(): void;
 }
-
-
-
-
-
