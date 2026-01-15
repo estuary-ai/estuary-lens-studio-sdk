@@ -1,0 +1,50 @@
+- !<AssetImportMetadata/dc85c7cb-f73c-4e84-98e7-f3c372e81793>
+  ImportedAssetIds:
+    TypeScriptAsset: !<reference> af1c29fb-fd7e-4fb4-a073-e3a36fdfc7c9
+  ImporterName: TypeScriptAssetImporter
+  PrimaryAsset: !<reference> af1c29fb-fd7e-4fb4-a073-e3a36fdfc7c9
+  PackageType: NotAPackage
+  LegacyPackagePolicy: ~
+  ExtraData:
+    {}
+  AssetDataMap:
+    TypeScriptAsset: !<own> 4aff7192-5971-4d2e-b0ae-b62d06c604e2
+  DependentFiles:
+    []
+  ImporterSettings: !<AssetImporterSettings>
+    {}
+  CompressionSettings: !<own> 00000000-0000-0000-0000-000000000000
+- !<TypeScriptAssetData/4aff7192-5971-4d2e-b0ae-b62d06c604e2>
+  SvgIcon: ""
+  SetupScript:
+    code: ""
+  Description: ""
+  VersionMajor: 0
+  VersionMinor: 0
+  VersionPatch: 0
+  ComponentUid: ff6164af-1727-45bf-b98f-d7a2da8f09e5
+  ExportUid: 00000000-0000-0000-0000-000000000000
+  PackagePolicy: CanBeUnpacked
+  ScriptInputsHidden:
+    credentialsObject: false
+    debugMode: false
+    strictMode: false
+  ScriptTypesHidden:
+    {}
+  ReadMe: !<reference> 00000000-0000-0000-0000-000000000000
+  DeclarationFile: !<reference> 00000000-0000-0000-0000-000000000000
+  Tags:
+    []
+  Attachments:
+    []
+  DefaultScriptInputs:
+    - credentialsObject: !<reference.SceneObject> 00000000-0000-0000-0000-000000000000
+      strictMode: false
+      debugMode: false
+  ScriptTypes:
+    -
+      {}
+  InputLines:
+    - '// @input SceneObject credentialsObject {"hint":"SceneObject with EstuaryCredentials (optional, uses singleton if not set)"}'
+    - '// @input bool strictMode {"hint":"Only trigger registered actions (ignore unknown actions)"}'
+    - '// @input bool debugMode {"hint":"Enable debug logging"}'

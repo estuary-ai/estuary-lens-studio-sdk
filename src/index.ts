@@ -16,6 +16,8 @@ export * from './Core/EstuaryEvents';
 export * from './Components/EstuaryManager';
 export * from './Components/EstuaryCharacter';
 export * from './Components/EstuaryMicrophone';
+export * from './Components/EstuaryActionManager';
+export * from './Components/EstuaryCredentials';
 // Note: Use DynamicAudioOutput from RemoteServiceGateway.lspkg for audio playback
 
 // Model exports

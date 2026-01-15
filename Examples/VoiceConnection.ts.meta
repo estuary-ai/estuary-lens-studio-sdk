@@ -26,9 +26,7 @@
   ExportUid: 00000000-0000-0000-0000-000000000000
   PackagePolicy: CanBeUnpacked
   ScriptInputsHidden:
-    apiKey: false
-    characterId: false
-    debugMode: false
+    credentialsObject: false
     dynamicAudioOutputObject: false
     internetModule: false
     microphoneRecorderObject: false
@@ -41,19 +39,15 @@
   Attachments:
     []
   DefaultScriptInputs:
-    - apiKey: est_QZV8LFmvBgq3rBfK39x22aWL_ukR4jd_cH7vBFGr4MU
-      characterId: 3799f1e4-1b67-426f-a342-65d40afc89e4
+    - credentialsObject: !<reference.SceneObject> 00000000-0000-0000-0000-000000000000
       microphoneRecorderObject: !<reference.SceneObject> 00000000-0000-0000-0000-000000000000
       dynamicAudioOutputObject: !<reference.SceneObject> 00000000-0000-0000-0000-000000000000
       internetModule: !<reference.InternetModule> 00000000-0000-0000-0000-000000000000
-      debugMode: true
   ScriptTypes:
     -
       {}
   InputLines:
-    - '// @input string apiKey = "[ESTUARY_API_KEY]" {"hint":"Generated from your Estuary dashboard"}'
-    - '// @input string characterId = "[ESTUARY_CHARACTER_ID]" {"hint":"Character/Agent ID from your Estuary dashboard"}'
+    - '// @input SceneObject credentialsObject {"hint":"SceneObject with EstuaryCredentials script (contains API key & character ID)"}'
     - '// @input SceneObject microphoneRecorderObject {"hint":"SceneObject with MicrophoneRecorder script (REQUIRED)"}'
     - '// @input SceneObject dynamicAudioOutputObject {"hint":"SceneObject with DynamicAudioOutput script for voice playback"}'
     - '// @input Asset.InternetModule internetModule {"hint":"Connect the InternetModule from your scene"}'
-    - // @input bool debugMode = true

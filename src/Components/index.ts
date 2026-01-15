@@ -2,6 +2,8 @@
 export * from './EstuaryManager';
 export * from './EstuaryCharacter';
 export * from './EstuaryMicrophone';
+export * from './EstuaryActionManager';
+export * from './EstuaryCredentials';
 
 
 
