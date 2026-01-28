@@ -12,7 +12,7 @@
 
 import { EstuaryManager, IEstuaryCharacterHandler } from './EstuaryManager';
 import { EstuaryConfig } from '../Core/EstuaryConfig';
-import { ConnectionState, EventEmitter } from '../Core/EstuaryEvents';
+import { ConnectionState, EventEmitter, CameraCaptureRequest } from '../Core/EstuaryEvents';
 import { SessionInfo } from '../Models/SessionInfo';
 import { BotResponse } from '../Models/BotResponse';
 import { BotVoice } from '../Models/BotVoice';
@@ -31,6 +31,7 @@ export interface EstuaryCharacterEvents {
     interrupt: (data: InterruptData) => void;
     error: (error: string) => void;
     connectionStateChanged: (state: ConnectionState) => void;
+    cameraCaptureRequest: (request: CameraCaptureRequest) => void;
 }
 
 /**
@@ -77,6 +78,9 @@ export class EstuaryCharacter
 
     /** The message ID currently being processed */
     private _currentMessageId: string = '';
+
+    /** The message ID that was interrupted (for filtering late-arriving audio) */
+    private _interruptedMessageId: string = '';
 
     // ==================== References ====================
 
@@ -229,6 +233,9 @@ export class EstuaryCharacter
         this._currentPartialResponse = '';
         this._currentMessageId = '';
 
+        // Tell server to start voice mode (enables Deepgram STT)
+        EstuaryManager.instance.startVoiceMode();
+
         print(`[EstuaryCharacter] Voice session started for ${this._characterId}`);
 
         // Start microphone if available
@@ -242,6 +249,9 @@ export class EstuaryCharacter
      */
     endVoiceSession(): void {
         this._isVoiceSessionActive = false;
+
+        // Tell server to stop voice mode (saves STT costs)
+        EstuaryManager.instance.stopVoiceMode();
 
         print(`[EstuaryCharacter] Voice session ended for ${this._characterId}`);
 
@@ -276,9 +286,14 @@ export class EstuaryCharacter
      * Emits 'interrupt' event - handle audio stopping externally.
      */
     interrupt(): void {
+        // Store the current message ID as interrupted so late-arriving audio is filtered
+        if (this._currentMessageId) {
+            this._interruptedMessageId = this._currentMessageId;
+        }
+        
         this._currentPartialResponse = '';
         this._currentMessageId = '';
-        this.emit('interrupt', { reason: 'user_interrupt' });
+        this.emit('interrupt', { messageId: this._interruptedMessageId, reason: 'user_interrupt' });
     }
 
     /**
@@ -317,8 +332,12 @@ export class EstuaryCharacter
     }
 
     handleBotResponse(response: BotResponse): void {
-        // Track message ID
+        // Track message ID and clear interrupted state for new messages
         if (response.messageId) {
+            // If this is a new message, clear the interrupted message ID
+            if (this._currentMessageId !== response.messageId) {
+                this._interruptedMessageId = '';
+            }
             this._currentMessageId = response.messageId;
         }
 
@@ -333,6 +352,18 @@ export class EstuaryCharacter
     }
 
     handleBotVoice(voice: BotVoice): void {
+        // Filter out audio for interrupted messages
+        if (this._interruptedMessageId && voice.messageId === this._interruptedMessageId) {
+            // This audio belongs to an interrupted message - discard it
+            return;
+        }
+
+        // If this is a new message, clear the interrupted state
+        if (voice.messageId && this._currentMessageId !== voice.messageId) {
+            this._interruptedMessageId = '';
+            this._currentMessageId = voice.messageId;
+        }
+
         // Emit event for external handling (e.g., DynamicAudioOutput)
         this.emit('voiceReceived', voice);
     }
@@ -342,6 +373,14 @@ export class EstuaryCharacter
     }
 
     handleInterrupt(data: InterruptData): void {
+        // Store the interrupted message ID so we can filter late-arriving audio
+        if (data.messageId) {
+            this._interruptedMessageId = data.messageId;
+        } else if (this._currentMessageId) {
+            // If no messageId in interrupt data, use the current message ID
+            this._interruptedMessageId = this._currentMessageId;
+        }
+        
         this._currentPartialResponse = '';
         this._currentMessageId = '';
         this.emit('interrupt', data);
@@ -354,6 +393,17 @@ export class EstuaryCharacter
 
     handleConnectionStateChanged(state: ConnectionState): void {
         this.emit('connectionStateChanged', state);
+    }
+
+    handleCameraCaptureRequest(request: CameraCaptureRequest): void {
+        print('');
+        print('📷 ========================================');
+        print('📷 CAMERA CAPTURE REQUESTED!');
+        print(`📷 Subscribe to 'cameraCaptureRequest' event to handle this.`);
+        print(`📷 Then call sendCameraImage() with the captured image.`);
+        print('📷 ========================================');
+        print('');
+        this.emit('cameraCaptureRequest', request);
     }
 
     // ==================== Private Methods ====================
