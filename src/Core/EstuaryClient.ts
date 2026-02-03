@@ -75,6 +75,15 @@ interface AuthenticateData {
     api_key: string;
     character_id: string;
     player_id: string;
+    audio_sample_rate?: number;  // TTS playback sample rate (default 48000, use 16000 for Spectacles)
+}
+
+/**
+ * Preferences that can be updated at any time during the session.
+ */
+export interface ClientPreferences {
+    /** When true, backend will generate a voice acknowledgment before camera capture */
+    enableVisionAcknowledgment?: boolean;
 }
 
 /**
@@ -92,6 +101,25 @@ interface AudioPayload {
 }
 
 /**
+ * Camera capture request from server.
+ */
+interface CameraCaptureRequest {
+    request_id: string;
+    text?: string;
+}
+
+/**
+ * Camera image payload to send to server.
+ */
+interface CameraImagePayload {
+    image: string;  // base64 encoded image
+    mime_type: string;
+    request_id?: string;
+    text?: string;
+    sample_rate?: number;  // TTS output sample rate (default: 16000 for Spectacles)
+}
+
+/**
  * Estuary WebSocket client for Lens Studio.
  * Implements Socket.IO v4 protocol using Lens Studio's WebSocket API.
  */
@@ -104,6 +132,12 @@ export class EstuaryClient extends EventEmitter<any> {
     private _disposed: boolean = false;
     private _namespace: string = SDK_NAMESPACE;
     private _auth: AuthenticateData | null = null;
+    private _connectStartMs: number | null = null;
+    private _wsOpenMs: number | null = null;
+    private _firstMessageMs: number | null = null;
+    private _engineIoOpenMs: number | null = null;
+    private _namespaceConnectedMs: number | null = null;
+    private _sessionInfoMs: number | null = null;
     
     // Send queue to prevent WebSocket message corruption
     // Lens Studio's WebSocket concatenates rapid sends into single packets!
@@ -272,6 +306,102 @@ export class EstuaryClient extends EventEmitter<any> {
     }
 
     /**
+     * Signal to the server that a camera image is about to be sent.
+     * This allows the server to send a vision acknowledgment and wait for the image
+     * instead of generating a "I can't see" response.
+     * 
+     * @param text The transcript that triggered vision detection
+     * @param requestId Optional request ID for correlation
+     */
+    sendVisionPending(text: string, requestId?: string): void {
+        if (!this.isConnected) {
+            this.logError('Cannot send vision pending: not connected');
+            return;
+        }
+
+        const payload = {
+            text: text,
+            request_id: requestId || `vision-pending-${Date.now()}`
+        };
+        this.emitSocketEvent('vision_pending', payload);
+        this.log(`Sent vision_pending signal for: ${text.substring(0, 50)}...`);
+    }
+
+    /**
+     * Start voice mode on the server (enables Deepgram STT).
+     * Must be called before streaming audio for speech-to-text.
+     */
+    startVoiceMode(): void {
+        if (!this.isConnected) {
+            this.logError('Cannot start voice mode: not connected');
+            return;
+        }
+
+        this.emitSocketEvent('start_voice', null);
+        this.log('Requested server to start voice mode');
+    }
+
+    /**
+     * Stop voice mode on the server (disables Deepgram STT).
+     * Call this when switching to text-only mode to save STT costs.
+     */
+    stopVoiceMode(): void {
+        if (!this.isConnected) {
+            this.logError('Cannot stop voice mode: not connected');
+            return;
+        }
+
+        this.emitSocketEvent('stop_voice', null);
+        this.log('Requested server to stop voice mode');
+    }
+
+    /**
+     * Update session preferences on the server.
+     * Can be called at any time while connected to update settings like vision acknowledgment.
+     * @param preferences - The preferences to update
+     */
+    updatePreferences(preferences: ClientPreferences): void {
+        if (!this.isConnected) {
+            this.logError('Cannot update preferences: not connected');
+            return;
+        }
+
+        this.emitSocketEvent('update_preferences', preferences);
+        this.log(`Updated preferences: ${JSON.stringify(preferences)}`);
+    }
+
+    /**
+     * Send a camera image to the server for AI analysis.
+     * @param imageBase64 - Base64 encoded image data
+     * @param mimeType - MIME type of the image (e.g., 'image/jpeg')
+     * @param requestId - Optional request ID if responding to a camera_capture_request
+     * @param text - Optional text context to send with the image
+     * @param sampleRate - TTS output sample rate (default: 16000 for Spectacles hardware)
+     */
+    sendCameraImage(imageBase64: string, mimeType: string = 'image/jpeg', requestId?: string, text?: string, sampleRate: number = 16000): void {
+        if (!this.isConnected) {
+            this.logError('Cannot send camera image: not connected');
+            return;
+        }
+
+        const payload: CameraImagePayload = {
+            image: imageBase64,
+            mime_type: mimeType,
+            sample_rate: sampleRate,
+        };
+
+        if (requestId) {
+            payload.request_id = requestId;
+        }
+        if (text) {
+            payload.text = text;
+        }
+
+        this.emitSocketEvent('camera_image', payload);
+        this.log(`Sent camera image (${mimeType}, ${sampleRate}Hz)${requestId ? ` for request ${requestId}` : ''}`);
+    }
+
+    /**
      * Dispose of the client and release resources.
      */
     dispose(): void {
@@ -291,20 +421,61 @@ export class EstuaryClient extends EventEmitter<any> {
         this.removeAllListeners();
     }
 
+    /**
+     * Process the send queue.
+     * Call this periodically (e.g., from an update loop) to ensure queued messages
+     * like ping/pong responses are sent even when no new messages are being added.
+     * This prevents connection timeouts during periods of silence.
+     */
+    tick(): void {
+        this.processSendQueue();
+    }
+
     // ==================== Private Methods ====================
+
+    private resetConnectionTimings(): void {
+        const now = Date.now();
+        this._connectStartMs = now;
+        this._wsOpenMs = null;
+        this._firstMessageMs = null;
+        this._engineIoOpenMs = null;
+        this._namespaceConnectedMs = null;
+        this._sessionInfoMs = null;
+        this.log(`Timing connect_start: 0ms`);
+    }
+
+    private logTiming(label: string, timestampMs: number): void {
+        if (!this._config.debugLogging) {
+            return;
+        }
+        const parts: string[] = [];
+        if (this._connectStartMs !== null) {
+            parts.push(`since connect=${timestampMs - this._connectStartMs}ms`);
+        }
+        if (this._wsOpenMs !== null) {
+            parts.push(`since ws open=${timestampMs - this._wsOpenMs}ms`);
+        }
+        if (this._firstMessageMs !== null) {
+            parts.push(`since first msg=${timestampMs - this._firstMessageMs}ms`);
+        }
+        this.log(`Timing ${label}: ${parts.join(', ')}`);
+    }
 
     private connectInternal(): void {
         this.setState(ConnectionState.Connecting);
+        this.resetConnectionTimings();
 
         try {
             // Build WebSocket URL
             const wsUrl = this.buildWebSocketUrl();
             
             // Store auth for namespace connection
+            // Include audio_sample_rate to tell server what TTS sample rate to use
             this._auth = {
                 api_key: this._config.apiKey,
                 character_id: this._config.characterId,
-                player_id: this._config.playerId
+                player_id: this._config.playerId,
+                audio_sample_rate: this._config.playbackSampleRate || 16000  // Default 16kHz for Spectacles
             };
 
             this.log(`Connecting to ${wsUrl}...`);
@@ -421,6 +592,9 @@ export class EstuaryClient extends EventEmitter<any> {
     }
 
     private handleWebSocketOpen(): void {
+        const now = Date.now();
+        this._wsOpenMs = now;
+        this.logTiming('ws_open', now);
         this.log('WebSocket connected, waiting for Engine.IO handshake...');
         this._reconnectAttempts = 0;
     }
@@ -444,6 +618,11 @@ export class EstuaryClient extends EventEmitter<any> {
     }
 
     private handleWebSocketMessage(message: string): void {
+        if (this._firstMessageMs === null) {
+            const now = Date.now();
+            this._firstMessageMs = now;
+            this.logTiming('first_message', now);
+        }
         this.processSocketIOMessage(message);
     }
 
@@ -465,6 +644,11 @@ export class EstuaryClient extends EventEmitter<any> {
 
         if (message.startsWith('0')) {
             // Engine.IO open - now connect to namespace with auth
+            if (this._engineIoOpenMs === null) {
+                const now = Date.now();
+                this._engineIoOpenMs = now;
+                this.logTiming('engineio_open', now);
+            }
             this.log('Engine.IO connected, joining namespace...');
             const authJson = JSON.stringify(this._auth);
             this.log(`Sending auth payload: ${authJson}`);
@@ -478,6 +662,11 @@ export class EstuaryClient extends EventEmitter<any> {
         }
         else if (message.startsWith('40' + this._namespace) || message.startsWith('40,')) {
             // Socket.IO namespace connected
+            if (this._namespaceConnectedMs === null) {
+                const now = Date.now();
+                this._namespaceConnectedMs = now;
+                this.logTiming('namespace_connected', now);
+            }
             this.log('Namespace connected, waiting for session_info...');
             // The server should send session_info event after successful auth
         }
@@ -551,6 +740,9 @@ export class EstuaryClient extends EventEmitter<any> {
             case 'quota_exceeded':
                 this.handleQuotaExceeded(data);
                 break;
+            case 'camera_capture':
+                this.handleCameraCaptureRequest(data);
+                break;
             default:
                 this.log(`Unhandled event: ${eventName}`);
         }
@@ -558,6 +750,11 @@ export class EstuaryClient extends EventEmitter<any> {
 
     private handleSessionInfo(data: any): void {
         try {
+            if (this._sessionInfoMs === null) {
+                const now = Date.now();
+                this._sessionInfoMs = now;
+                this.logTiming('session_info', now);
+            }
             const sessionInfo = parseSessionInfo(data);
             this._currentSession = sessionInfo;
             this.setState(ConnectionState.Connected);
@@ -629,6 +826,23 @@ export class EstuaryClient extends EventEmitter<any> {
     private handleQuotaExceeded(data: any): void {
         const message = data?.message || 'API quota exceeded';
         this.logError(`Quota exceeded: ${message}`);
+    }
+
+    private handleCameraCaptureRequest(data: any): void {
+        try {
+            const requestId = data?.request_id || '';
+            const text = data?.text;
+            print('');
+            print('📷 ========================================');
+            print('📷 CAMERA CAPTURE REQUEST FROM SERVER');
+            print(`📷 Request ID: ${requestId}`);
+            print(`📷 Context: ${text || '(none)'}`);
+            print('📷 ========================================');
+            print('');
+            this.emit('cameraCaptureRequest', { request_id: requestId, text });
+        } catch (e) {
+            this.logError(`Failed to handle camera_capture_request: ${e}`);
+        }
     }
 
     private handleReconnect(): void {

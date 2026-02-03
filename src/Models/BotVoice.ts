@@ -5,7 +5,7 @@ export interface BotVoice {
     /** Base64-encoded audio data */
     audio: string;
     
-    /** Sample rate of the audio (default: 24000 for ElevenLabs) */
+    /** Sample rate of the audio (default: 48000 for ElevenLabs) */
     sampleRate: number;
     
     /** Index of this chunk in a streaming response */
@@ -37,10 +37,10 @@ interface BotVoiceJson {
  * Parse BotVoice from JSON object
  */
 export function parseBotVoice(json: BotVoiceJson): BotVoice {
-    const sampleRate = json.sample_rate ?? json.sampleRate ?? 24000;
+    const sampleRate = json.sample_rate ?? json.sampleRate ?? 48000;
     return {
         audio: json.audio || '',
-        sampleRate: sampleRate > 0 ? sampleRate : 24000,
+        sampleRate: sampleRate > 0 ? sampleRate : 48000,
         chunkIndex: json.chunk_index ?? json.chunkIndex ?? 0,
         messageId: json.message_id || json.messageId || '',
         isInterjection: json.is_interjection ?? json.isInterjection ?? false

@@ -18,7 +18,7 @@
   VersionPatch: 0
   UpdateCheckpoint: 0
   ExportUid: 00000000-0000-0000-0000-000000000000
-  ComponentUid: 00000000-0000-0000-0000-000000000000
+  ComponentUid: 659f6412-2d51-41de-9ef6-51f0abdf7468
   PackagePolicy: CanBeUnpacked
   ReadMe: !<reference> 00000000-0000-0000-0000-000000000000
   Tags:

@@ -41,6 +41,19 @@ export type ErrorHandler = (errorMessage: string) => void;
 export type ConnectionStateHandler = (state: ConnectionState) => void;
 
 /**
+ * Camera capture request from the server.
+ * The agent is requesting the client to capture and send an image.
+ */
+export interface CameraCaptureRequest {
+    /** Unique identifier for this request */
+    request_id: string;
+    /** Optional text context for the capture request */
+    text?: string;
+}
+
+export type CameraCaptureRequestHandler = (request: CameraCaptureRequest) => void;
+
+/**
  * Simple event emitter for Estuary SDK.
  * Provides type-safe event subscription and emission.
  */
@@ -122,6 +135,7 @@ export interface EstuaryClientEvents {
     interrupt: InterruptHandler;
     error: ErrorHandler;
     connectionStateChanged: ConnectionStateHandler;
+    cameraCaptureRequest: CameraCaptureRequestHandler;
 }
 
 

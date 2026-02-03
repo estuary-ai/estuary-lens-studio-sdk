@@ -28,6 +28,8 @@ import { EstuaryCharacter } from '../src/Components/EstuaryCharacter';
 import { EstuaryMicrophone, MicrophoneRecorder } from '../src/Components/EstuaryMicrophone';
 import { EstuaryCredentials, IEstuaryCredentials, getCredentialsFromSceneObject } from '../src/Components/EstuaryCredentials';
 import { EstuaryActionManager, EstuaryActions } from '../src/Components/EstuaryActionManager';
+import { EstuaryManager } from '../src/Components/EstuaryManager';
+import { VisionIntentDetector, VisionIntentDetectorComponent } from '../src/Components/VisionIntentDetector';
 import { EstuaryConfig } from '../src/Core/EstuaryConfig';
 import { setInternetModule } from '../src/Core/EstuaryClient';
 import { SessionInfo } from '../src/Models/SessionInfo';
@@ -94,11 +96,32 @@ export class SimpleAutoConnect extends BaseScriptComponent {
     @hint("Connect the InternetModule from your scene")
     internetModule: InternetModule;
     
+    // ==================== Vision Intent Detection (Natural Language Camera) ====================
+    
+    /**
+     * Enable vision intent detection for natural language camera activation.
+     * When enabled, phrases like "what do you think of this vase?" will trigger camera capture.
+     * Uses smart heuristic detection - no additional API key needed!
+     */
+    @input
+    @hint("Enable natural language camera activation (e.g., 'what do you think of this vase?')")
+    enableVisionIntentDetection: boolean = true;
+    
+    /**
+     * Confidence threshold for triggering camera capture (0-1).
+     * Lower = more triggers, Higher = more selective.
+     * Default 0.7 balances sensitivity with avoiding false triggers.
+     */
+    @input
+    @hint("Confidence threshold for camera trigger (0.0-1.0)")
+    visionConfidenceThreshold: number = 0.7;
+    
     /** 
      * Default sample rate for audio playback.
-     * ElevenLabs uses 24000Hz, other TTS providers may vary.
+     * 16000Hz is optimized for Snap Spectacles hardware.
+     * Other platforms may use 48000Hz.
      */
-    audioSampleRate: number = 24000;
+    audioSampleRate: number = 16000;
 
     
     // ==================== Private Members ====================
@@ -106,10 +129,28 @@ export class SimpleAutoConnect extends BaseScriptComponent {
     private character: EstuaryCharacter | null = null;
     private microphone: EstuaryMicrophone | null = null;
     private actionManager: EstuaryActionManager | null = null;
+    private visionIntentDetector: VisionIntentDetector | null = null;
     private dynamicAudioOutput: DynamicAudioOutput | null = null;
     private playerId: string = "";
     private updateEvent: SceneEvent | null = null;
     private audioInitialized: boolean = false;
+    
+    // ==================== Inactivity Tracking ====================
+    
+    /** Last activity timestamp (ms) */
+    private lastActivityTime: number = 0;
+    
+    /** Inactivity timeout in ms (10 minutes) */
+    private readonly INACTIVITY_TIMEOUT_MS: number = 10 * 60 * 1000;
+    
+    /** Last queue tick timestamp */
+    private lastTickTime: number = 0;
+    
+    /** Tick interval in ms (100ms - processes send queue to flush pending pong responses) */
+    private readonly TICK_INTERVAL_MS: number = 100;
+    
+    /** Whether we've already disconnected due to inactivity */
+    private disconnectedDueToInactivity: boolean = false;
     
     // ==================== Lifecycle ====================
     
@@ -206,6 +247,21 @@ export class SimpleAutoConnect extends BaseScriptComponent {
         EstuaryActions.setManager(this.actionManager);
         
         this.log("Action manager configured - EstuaryActions global events ready");
+        
+        // Set up vision intent detector for natural language camera activation
+        if (this.enableVisionIntentDetection) {
+            this.visionIntentDetector = new VisionIntentDetector({
+                apiKey: '', // Uses heuristic detection - no external API needed
+                confidenceThreshold: this.visionConfidenceThreshold,
+                debugLogging: this.credentials!.debugMode
+            });
+            
+            // Connect to character to listen for transcripts
+            this.visionIntentDetector.startListening(this.character);
+            
+            this.log("Vision intent detection enabled");
+            this.log("Natural language phrases like 'what do you think of this vase?' will now trigger camera");
+        }
         
         // Set up DynamicAudioOutput for voice responses (Snap's recommended approach)
         if (this.dynamicAudioOutputObject) {
@@ -315,6 +371,10 @@ export class SimpleAutoConnect extends BaseScriptComponent {
             this.actionManager.dispose();
             this.actionManager = null;
         }
+        if (this.visionIntentDetector) {
+            this.visionIntentDetector.dispose();
+            this.visionIntentDetector = null;
+        }
         if (this.dynamicAudioOutput) {
             this.dynamicAudioOutput.interruptAudioOutput();
             this.dynamicAudioOutput = null;
@@ -337,6 +397,11 @@ export class SimpleAutoConnect extends BaseScriptComponent {
             print(`  Session: ${session.sessionId}`);
             print("===========================================");
             
+            // Initialize activity tracking
+            this.recordActivity();
+            this.lastTickTime = Date.now();
+            this.disconnectedDueToInactivity = false;
+            
             // Start voice session FIRST - this enables audio streaming
             this.character!.startVoiceSession();
             
@@ -344,9 +409,12 @@ export class SimpleAutoConnect extends BaseScriptComponent {
             this.startMicStream();
         });
         
-        // Disconnected
+        // Disconnected - show obvious log
         this.character.on('disconnected', () => {
-            this.log("Disconnected");
+            if (!this.disconnectedDueToInactivity) {
+                // Disconnected by server or other reason (not our inactivity timeout)
+                this.logDisconnect("Connection closed by server");
+            }
             if (this.microphone) {
                 this.microphone.stopRecording();
             }
@@ -354,6 +422,8 @@ export class SimpleAutoConnect extends BaseScriptComponent {
         
         // AI response (text)
         this.character.on('botResponse', (response: BotResponse) => {
+            // Record activity - conversation is happening
+            this.recordActivity();
             if (response.isFinal) {
                 print(`[AI] ${response.text}`);
             }
@@ -361,6 +431,9 @@ export class SimpleAutoConnect extends BaseScriptComponent {
         
         // AI voice response (audio) - play using DynamicAudioOutput
         this.character.on('voiceReceived', (voice: BotVoice) => {
+            // Record activity - voice response received
+            this.recordActivity();
+            
             if (this.credentials?.debugMode) {
                 this.log(`Voice audio received: ${voice.audio?.length || 0} chars base64, chunk ${voice.chunkIndex}`);
             }
@@ -375,6 +448,8 @@ export class SimpleAutoConnect extends BaseScriptComponent {
         
         // Handle interrupts - stop audio when user starts speaking
         this.character.on('interrupt', () => {
+            // Record activity - user interrupted
+            this.recordActivity();
             if (this.dynamicAudioOutput) {
                 this.dynamicAudioOutput.interruptAudioOutput();
                 this.log("Audio interrupted");
@@ -383,6 +458,8 @@ export class SimpleAutoConnect extends BaseScriptComponent {
         
         // STT from Deepgram
         this.character.on('transcript', (stt: SttResponse) => {
+            // Record activity - user is speaking
+            this.recordActivity();
             if (stt.isFinal) {
                 print(`[You] ${stt.text}`);
             }
@@ -406,6 +483,72 @@ export class SimpleAutoConnect extends BaseScriptComponent {
     private onUpdate(): void {
         // MicrophoneRecorder uses event-based delivery, no per-frame processing needed
         // DynamicAudioOutput handles audio playback internally via native AudioComponent
+        
+        // Check for inactivity timeout and process send queue
+        this.checkInactivityAndTick();
+    }
+    
+    /**
+     * Check for inactivity timeout and process send queue.
+     * Disconnects after 10 minutes of no user activity.
+     */
+    private checkInactivityAndTick(): void {
+        if (!this.character?.isConnected) {
+            return;
+        }
+        
+        const now = Date.now();
+        
+        // Check for inactivity timeout (10 minutes)
+        if (this.lastActivityTime > 0) {
+            const inactiveTime = now - this.lastActivityTime;
+            if (inactiveTime >= this.INACTIVITY_TIMEOUT_MS && !this.disconnectedDueToInactivity) {
+                this.disconnectedDueToInactivity = true;
+                
+                // Disable auto-reconnect so it stays disconnected
+                this.character.autoReconnect = false;
+                
+                this.logDisconnect("INACTIVITY TIMEOUT - No activity for 10 minutes");
+                this.character.disconnect();
+                return;
+            }
+        }
+        
+        // Process send queue periodically to ensure ping/pong responses are sent
+        // This is critical because:
+        // 1. The SDK's send queue may have pending pong responses that need to be flushed
+        // 2. During silence (no voice), no audio is sent, so the queue may stall
+        // 3. This has zero API cost - just processes already-queued messages
+        if (now - this.lastTickTime >= this.TICK_INTERVAL_MS) {
+            this.lastTickTime = now;
+            EstuaryManager.instance.tick();
+        }
+    }
+    
+    /**
+     * Record user activity to reset the inactivity timer.
+     * Called when user sends audio, text, or interacts with the system.
+     */
+    private recordActivity(): void {
+        this.lastActivityTime = Date.now();
+        this.disconnectedDueToInactivity = false;
+    }
+    
+    /**
+     * Display a very obvious disconnect log.
+     */
+    private logDisconnect(reason: string): void {
+        print("");
+        print("╔══════════════════════════════════════════════════════════════════╗");
+        print("║                                                                  ║");
+        print("║   ⚠️  ESTUARY SDK DISCONNECTED  ⚠️                                ║");
+        print("║                                                                  ║");
+        print("╠══════════════════════════════════════════════════════════════════╣");
+        print(`║   Reason: ${reason.padEnd(54)}║`);
+        print(`║   Time: ${new Date().toISOString().padEnd(56)}║`);
+        print("║                                                                  ║");
+        print("╚══════════════════════════════════════════════════════════════════╝");
+        print("");
     }
     
     // ==================== Public Methods ====================
@@ -413,6 +556,8 @@ export class SimpleAutoConnect extends BaseScriptComponent {
     /** Send a text message to the AI */
     sendMessage(text: string): void {
         if (this.character?.isConnected) {
+            // Record activity - user is sending a message
+            this.recordActivity();
             this.character.sendText(text);
         }
     }
@@ -425,6 +570,11 @@ export class SimpleAutoConnect extends BaseScriptComponent {
     /** Get the character instance */
     getCharacter(): EstuaryCharacter | null {
         return this.character;
+    }
+    
+    /** Get the vision intent detector for natural language camera activation */
+    getVisionIntentDetector(): VisionIntentDetector | null {
+        return this.visionIntentDetector;
     }
     
     // ==================== Utility ====================

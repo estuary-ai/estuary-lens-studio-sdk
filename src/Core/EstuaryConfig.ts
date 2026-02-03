@@ -21,7 +21,7 @@ export interface EstuaryConfig {
     /** Sample rate for microphone recording (must be 16000 for STT) */
     recordingSampleRate?: number;
 
-    /** Expected sample rate for voice playback (ElevenLabs: 24000) */
+    /** Expected sample rate for voice playback (16000 for Spectacles, 48000 for desktop) */
     playbackSampleRate?: number;
 
     /** Duration of audio chunks to send (in milliseconds) */
@@ -42,10 +42,11 @@ export interface EstuaryConfig {
 
 /**
  * Default configuration values.
+ * Note: playbackSampleRate is 16000 for Spectacles hardware optimization.
  */
 export const DEFAULT_CONFIG: Required<Omit<EstuaryConfig, 'serverUrl' | 'apiKey' | 'characterId' | 'playerId'>> = {
     recordingSampleRate: 16000,
-    playbackSampleRate: 24000,
+    playbackSampleRate: 16000,  // 16kHz for Spectacles (hardware optimized)
     audioChunkDurationMs: 100,
     autoReconnect: true,
     maxReconnectAttempts: 5,

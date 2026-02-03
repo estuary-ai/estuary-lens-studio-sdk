@@ -11,16 +11,24 @@
  * 3. Set your API key and Character ID in the Inspector
  * 4. Reference this SceneObject from other Estuary components
  * 
- * User ID Management:
- * - User ID is persisted on-device using PersistentStorageSystem
- * - If a User ID is entered in the "User ID" field, it will be used and stored
- * - If the User ID field is empty, the stored User ID will be loaded from device storage
- * - If no stored User ID exists, a new one will be generated and stored
- * - This allows conversation persistence across Lens sessions on the same device
+ * User ID Management (Priority Order):
+ * 1. Snap Account User ID - Uses userContextSystem to get the Snapchat account's user ID
+ *    This ID is tied to the user's Snapchat account and persists across devices
+ * 2. Manual User ID - If entered in the inspector field, will be used and stored
+ * 3. Stored User ID - Loaded from device persistent storage
+ * 4. Generated User ID - A new random ID is generated and stored
+ * 
+ * The Snap Account User ID is the preferred method for conversation persistence as it:
+ * - Remains consistent when the same user logs in on different devices
+ * - Automatically identifies the user without manual configuration
+ * - Works across Lens sessions on the same Snapchat account
  */
 
-/** Storage key for persistent user ID */
+/** Storage key for persistent user ID (fallback when Snap ID unavailable) */
 const USER_ID_STORAGE_KEY = "estuary_user_id";
+
+/** Storage key for caching the Snap account user ID */
+const SNAP_USER_ID_CACHE_KEY = "estuary_snap_user_id";
 
 /**
  * Interface for accessing EstuaryCredentials from other scripts.
@@ -35,8 +43,10 @@ export interface IEstuaryCredentials {
     serverUrl: string;
     /** Enable debug logging across all Estuary components */
     debugMode: boolean;
-    /** The user ID for conversation persistence (manual or auto-generated) */
+    /** The user ID for conversation persistence (from Snap account, manual input, or auto-generated) */
     userId: string;
+    /** Whether we're using Snap account-based user ID (cross-device persistence) */
+    isUsingSnapAccountId?: boolean;
 }
 
 /**
@@ -70,8 +80,8 @@ export class EstuaryCredentials extends BaseScriptComponent implements IEstuaryC
      * The Estuary server URL.
      * Default: wss://api.estuary-ai.com
      */
-    // @input
-    // @hint("Estuary server URL (default: wss://api.estuary-ai.com)")
+    @input
+    @hint("Estuary server URL (default: wss://api.estuary-ai.com)")
     serverUrl: string = "wss://api.estuary-ai.com";
     
     /** 
@@ -84,18 +94,31 @@ export class EstuaryCredentials extends BaseScriptComponent implements IEstuaryC
     // ==================== User ID Configuration ====================
     
     /**
-     * User ID field.
-     * If provided, this User ID will be used and stored for future sessions.
-     * If empty, the stored User ID will be loaded from device storage.
-     * Use this to test with a specific User ID or resume a conversation.
+     * Enable Snap Account-based User ID.
+     * When enabled, uses the Snapchat account's user ID for conversation persistence.
+     * This ID is consistent across all devices logged into the same Snapchat account.
+     * Recommended for production use.
      */
     @input
-    @hint("Enter a User ID to use (will be stored), or leave empty to use stored/generated ID")
+    @hint("Use Snapchat account ID for cross-device conversation persistence (recommended)")
+    useSnapAccountId: boolean = true;
+    
+    /**
+     * User ID field (override).
+     * If provided, this User ID will be used instead of the Snap account ID.
+     * Useful for testing with a specific User ID or debugging.
+     * Leave empty to use automatic Snap account-based or generated ID.
+     */
+    @input
+    @hint("Override: Enter a specific User ID (leave empty to use Snap account ID)")
     @allowUndefined
     userIdField: string = "";
     
-    /** The resolved user ID (either manual or auto-generated) */
+    /** The resolved user ID (from Snap account, manual input, or auto-generated) */
     private _resolvedUserId: string = "";
+    
+    /** Whether we successfully retrieved the Snap account ID */
+    private _usingSnapAccountId: boolean = false;
     
     // ==================== Singleton Access ====================
     
@@ -116,14 +139,23 @@ export class EstuaryCredentials extends BaseScriptComponent implements IEstuaryC
         return EstuaryCredentials._instance !== null;
     }
     
-    // ==================== User ID Property ====================
+    // ==================== User ID Properties ====================
     
     /**
      * Get the resolved user ID.
-     * Returns the userIdField value if provided, otherwise a randomly generated ID.
+     * Returns the Snap account ID, userIdField value, stored ID, or a generated ID.
      */
     get userId(): string {
         return this._resolvedUserId;
+    }
+    
+    /**
+     * Check if we're using Snap account-based user ID.
+     * When true, the user ID is tied to the Snapchat account and
+     * conversations will persist across all devices on the same account.
+     */
+    get isUsingSnapAccountId(): boolean {
+        return this._usingSnapAccountId;
     }
     
     // ==================== Lifecycle ====================
@@ -154,52 +186,196 @@ export class EstuaryCredentials extends BaseScriptComponent implements IEstuaryC
     
     /**
      * Initialize the user ID based on configuration.
-     * Priority: userIdField (if provided) > stored User ID > generate new
-     * If userIdField is provided, it will be stored for future sessions.
+     * Priority: 
+     * 1. Manual userIdField (if provided) - for testing/debugging
+     * 2. Snap Account User ID (if useSnapAccountId is enabled) - for production
+     * 3. Cached Snap User ID (from previous session)
+     * 4. Stored User ID from device storage
+     * 5. Generate new random User ID
      */
     private initializeUserId(): void {
         const store = global.persistentStorageSystem.store;
         
-        // Priority 1: Use User ID from field if provided (and store it)
+        // Priority 1: Use User ID from field if provided (manual override)
         // Trim whitespace to handle copy-paste issues
         const trimmedUserIdField = this.userIdField ? this.userIdField.trim() : '';
         if (trimmedUserIdField.length > 0) {
             this._resolvedUserId = trimmedUserIdField;
+            this._usingSnapAccountId = false;
             // Store the manual User ID for future sessions
             store.putString(USER_ID_STORAGE_KEY, this._resolvedUserId);
-            this.log(`Using User ID from field: ${this._resolvedUserId}`);
-            this.log(`Stored User ID in persistent storage`);
-            this.printUserIdBanner();
+            this.log(`Using MANUAL User ID from field: ${this._resolvedUserId}`);
+            this.printUserIdBanner("manual override");
             return;
         }
         
-        // Priority 2: Try to load stored User ID from device
+        // Priority 2: Try to get Snap Account User ID (if enabled)
+        if (this.useSnapAccountId) {
+            const snapUserId = this.getSnapAccountUserId();
+            if (snapUserId && snapUserId.length > 0) {
+                this._resolvedUserId = snapUserId;
+                this._usingSnapAccountId = true;
+                // Cache the Snap User ID for faster access next session
+                store.putString(SNAP_USER_ID_CACHE_KEY, this._resolvedUserId);
+                this.log(`Using SNAP ACCOUNT User ID: ${this._resolvedUserId}`);
+                this.printUserIdBanner("Snap account");
+                return;
+            }
+            
+            // Priority 3: Try to use cached Snap User ID from previous session
+            if (store.has(SNAP_USER_ID_CACHE_KEY)) {
+                const cachedSnapId = store.getString(SNAP_USER_ID_CACHE_KEY);
+                const trimmedCachedId = cachedSnapId ? cachedSnapId.trim() : '';
+                if (trimmedCachedId.length > 0) {
+                    this._resolvedUserId = trimmedCachedId;
+                    this._usingSnapAccountId = true;
+                    this.log(`Using CACHED Snap Account User ID: ${this._resolvedUserId}`);
+                    this.printUserIdBanner("cached Snap account");
+                    return;
+                }
+            }
+            
+            this.log("Snap Account User ID not available, falling back to device storage...");
+        }
+        
+        // Priority 4: Try to load stored User ID from device
         if (store.has(USER_ID_STORAGE_KEY)) {
             const storedId = store.getString(USER_ID_STORAGE_KEY);
             // Trim stored value as well
             const trimmedStoredId = storedId ? storedId.trim() : '';
             if (trimmedStoredId.length > 0) {
                 this._resolvedUserId = trimmedStoredId;
+                this._usingSnapAccountId = false;
                 this.log(`Loaded User ID from persistent storage: ${this._resolvedUserId}`);
-                this.printUserIdBanner();
+                this.printUserIdBanner("device storage");
                 return;
             }
         }
         
-        // Priority 3: Generate new User ID and store it
+        // Priority 5: Generate new User ID and store it
         this._resolvedUserId = this.generateRandomUserId();
+        this._usingSnapAccountId = false;
         store.putString(USER_ID_STORAGE_KEY, this._resolvedUserId);
         this.log(`Generated new User ID: ${this._resolvedUserId}`);
         this.log(`Stored User ID in persistent storage`);
-        this.printUserIdBanner();
+        this.printUserIdBanner("generated");
+    }
+    
+    /**
+     * Get the Snap account user ID using userContextSystem synchronously.
+     * Uses the displayName which is available synchronously.
+     * 
+     * Note: displayName may change if the user changes their username,
+     * but it's still reliable for most use cases and is tied to the Snapchat account.
+     * 
+     * @returns The Snap account user ID, or null if not available
+     */
+    private getSnapAccountUserId(): string | null {
+        try {
+            // Access Snap's userContextSystem to get current user info
+            // This is available in Lens Studio via the global object
+            const userContextSystem = global.userContextSystem;
+            
+            if (!userContextSystem) {
+                this.log("userContextSystem not available");
+                return null;
+            }
+            
+            // Try to get display name synchronously first
+            // displayName is available on the userContextSystem directly in some versions
+            let displayName: string | null = null;
+            
+            // Check if displayName is directly accessible
+            if (typeof (userContextSystem as any).displayName === 'string') {
+                displayName = (userContextSystem as any).displayName;
+            }
+            
+            // If we got a display name, use it to create a stable user ID
+            if (displayName && displayName.length > 0) {
+                this.log(`Got displayName from userContextSystem: ${displayName}`);
+                // Create a stable hash from display name with spectacles_ prefix
+                // Format matches the original: spectacles_ + identifier
+                return `spectacles_${this.hashString(displayName)}`;
+            }
+            
+            // Try requestDisplayName with callback for async retrieval
+            // This will update the cached ID for next session
+            this.requestSnapUserIdAsync();
+            
+            return null;
+        } catch (error) {
+            this.log(`Error getting Snap account user ID: ${error}`);
+            return null;
+        }
+    }
+    
+    /**
+     * Asynchronously request the Snap user display name and cache it for future sessions.
+     * This uses the callback-based API of userContextSystem.
+     */
+    private requestSnapUserIdAsync(): void {
+        try {
+            const userContextSystem = global.userContextSystem;
+            if (!userContextSystem) {
+                return;
+            }
+            
+            // requestDisplayName uses a callback pattern
+            if (typeof userContextSystem.requestDisplayName === 'function') {
+                userContextSystem.requestDisplayName((displayName: string) => {
+                    if (displayName && displayName.length > 0) {
+                        // Format: spectacles_ + hash of displayName (consistent per account)
+                        const snapUserId = `spectacles_${this.hashString(displayName)}`;
+                        const store = global.persistentStorageSystem.store;
+                        
+                        // Cache this for next session
+                        store.putString(SNAP_USER_ID_CACHE_KEY, snapUserId);
+                        this.log(`Async: Cached Snap user ID for next session: ${snapUserId}`);
+                        
+                        // If we're not yet using a Snap account ID, update to use it
+                        // Check if current ID looks like a timestamp-based generated ID (longer format)
+                        if (!this._usingSnapAccountId) {
+                            this._resolvedUserId = snapUserId;
+                            this._usingSnapAccountId = true;
+                            store.putString(USER_ID_STORAGE_KEY, snapUserId);
+                            this.log(`Async: Updated current session to use Snap user ID: ${snapUserId}`);
+                            this.printUserIdBanner("Snap account (async)");
+                        }
+                    }
+                });
+            }
+        } catch (error) {
+            this.log(`Error in async Snap user ID request: ${error}`);
+        }
+    }
+    
+    /**
+     * Simple string hash function for creating stable IDs from display names.
+     * @param str The string to hash
+     * @returns A numeric hash as a string
+     */
+    private hashString(str: string): string {
+        let hash = 0;
+        for (let i = 0; i < str.length; i++) {
+            const char = str.charCodeAt(i);
+            hash = ((hash << 5) - hash) + char;
+            hash = hash & hash; // Convert to 32-bit integer
+        }
+        return Math.abs(hash).toString(36);
     }
     
     /**
      * Print the current User ID prominently to the Logger.
+     * @param source Description of where the User ID came from
      */
-    private printUserIdBanner(): void {
+    private printUserIdBanner(source: string): void {
         print("╔════════════════════════════════════════════════════════════╗");
-        print("║  ESTUARY USER ID: " + this._resolvedUserId.padEnd(41) + "║");
+        print("║  ESTUARY USER ID                                           ║");
+        print("║  " + this._resolvedUserId.padEnd(58) + "║");
+        print("║  Source: " + source.padEnd(50) + "║");
+        if (this._usingSnapAccountId) {
+            print("║  ✓ Cross-device persistence enabled (Snap account)        ║");
+        }
         print("╚════════════════════════════════════════════════════════════╝");
     }
     
@@ -238,10 +414,18 @@ export class EstuaryCredentials extends BaseScriptComponent implements IEstuaryC
         if (isValid) {
             this.log("✅ Credentials configured successfully");
             this.log(`   User ID: ${this._resolvedUserId}`);
-            const source = this.userIdField && this.userIdField.length > 0 
-                ? 'manual (from field)' 
-                : 'persistent storage';
+            let source: string;
+            if (this.userIdField && this.userIdField.trim().length > 0) {
+                source = 'manual (from inspector field)';
+            } else if (this._usingSnapAccountId) {
+                source = 'Snap account (cross-device)';
+            } else {
+                source = 'device storage (device-specific)';
+            }
             this.log(`   User ID source: ${source}`);
+            if (this._usingSnapAccountId) {
+                this.log(`   ✓ Conversation will persist across all devices on this Snap account`);
+            }
         }
         
         return isValid;

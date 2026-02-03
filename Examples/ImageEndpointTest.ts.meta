@@ -1,0 +1,56 @@
+- !<AssetImportMetadata/2db9630a-1dc7-4141-b918-0124e44d2d65>
+  ImportedAssetIds:
+    TypeScriptAsset: !<reference> 5fbbfa62-38f4-4f08-b159-14a609da60f6
+  ImporterName: TypeScriptAssetImporter
+  PrimaryAsset: !<reference> 5fbbfa62-38f4-4f08-b159-14a609da60f6
+  PackageType: NotAPackage
+  LegacyPackagePolicy: ~
+  ExtraData:
+    {}
+  AssetDataMap:
+    TypeScriptAsset: !<own> 4d28f744-c373-4ef5-a2ab-cf374aae47b7
+  DependentFiles:
+    []
+  ImporterSettings: !<AssetImporterSettings>
+    {}
+  CompressionSettings: !<own> 00000000-0000-0000-0000-000000000000
+- !<TypeScriptAssetData/4d28f744-c373-4ef5-a2ab-cf374aae47b7>
+  SvgIcon: ""
+  SetupScript:
+    code: ""
+  Description: ""
+  VersionMajor: 0
+  VersionMinor: 0
+  VersionPatch: 0
+  ComponentUid: c9fc65df-8fe0-4809-8b2d-35690f4d51ec
+  ExportUid: 00000000-0000-0000-0000-000000000000
+  PackagePolicy: CanBeUnpacked
+  ScriptInputsHidden:
+    autoRunOnConnect: false
+    cameraTexture: false
+    staticTestImage: false
+    testDelay: false
+    testPrompt: false
+  ScriptTypesHidden:
+    {}
+  ReadMe: !<reference> 00000000-0000-0000-0000-000000000000
+  DeclarationFile: !<reference> 00000000-0000-0000-0000-000000000000
+  Tags:
+    []
+  Attachments:
+    []
+  DefaultScriptInputs:
+    - cameraTexture: !<reference.Texture> 00000000-0000-0000-0000-000000000000
+      staticTestImage: !<reference.Texture> 00000000-0000-0000-0000-000000000000
+      autoRunOnConnect: true
+      testDelay: !<float> 2.000000
+      testPrompt: "This is a test image upload. What do you see?"
+  ScriptTypes:
+    -
+      {}
+  InputLines:
+    - '// @input Asset.Texture cameraTexture {"hint":"Optional: Device Camera Texture for live camera test"}'
+    - '// @input Asset.Texture staticTestImage {"hint":"Optional: Static test image (any image texture from Resources)"}'
+    - '// @input bool autoRunOnConnect = true {"hint":"Auto-run test when connected to server"}'
+    - '// @input float testDelay = 2 {"hint":"Delay (seconds) before running test after connection"}'
+    - '// @input string testPrompt = "This is a test image upload. What do you see?" {"hint":"Test prompt to send with the image"}'
