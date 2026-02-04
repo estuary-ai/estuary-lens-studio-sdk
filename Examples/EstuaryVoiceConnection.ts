@@ -29,7 +29,7 @@ import { EstuaryMicrophone, MicrophoneRecorder } from '../src/Components/Estuary
 import { EstuaryCredentials, IEstuaryCredentials, getCredentialsFromSceneObject } from '../src/Components/EstuaryCredentials';
 import { EstuaryActionManager, EstuaryActions } from '../src/Components/EstuaryActionManager';
 import { EstuaryManager } from '../src/Components/EstuaryManager';
-import { VisionIntentDetector, VisionIntentDetectorComponent } from '../src/Components/VisionIntentDetector';
+import { VisionIntentDetector } from '../src/Components/VisionIntentDetector';
 import { EstuaryConfig } from '../src/Core/EstuaryConfig';
 import { setInternetModule } from '../src/Core/EstuaryClient';
 import { SessionInfo } from '../src/Models/SessionInfo';

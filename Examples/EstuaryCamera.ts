@@ -10,7 +10,7 @@
  * 
  * Setup in Lens Studio:
  * 1. Create a Scene Object and add this script
- * 2. Make sure you have EstuaryCredentials and VoiceConnection (or EstuaryManager) set up
+ * 2. Make sure you have EstuaryCredentials and EstuaryVoiceConnection (or EstuaryManager) set up
  * 3. Enable "Extended Permissions" in Project Settings for development
  *    (allows both camera access and WebSocket together)
  * 4. Optionally adjust "captureResolution" (default 512px) in the Inspector

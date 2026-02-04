@@ -80,16 +80,9 @@ export class EstuaryCredentials extends BaseScriptComponent implements IEstuaryC
      * The Estuary server URL.
      * Default: wss://api.estuary-ai.com
      */
-    @input
-    @hint("Estuary server URL (default: wss://api.estuary-ai.com)")
+    // @input
+    // @hint("Estuary server URL (default: wss://api.estuary-ai.com)")
     serverUrl: string = "wss://api.estuary-ai.com";
-    
-    /** 
-     * Enable debug logging for all Estuary components.
-     */
-    @input
-    @hint("Enable debug logging for all Estuary components")
-    debugMode: boolean = true;
     
     // ==================== User ID Configuration ====================
     
@@ -113,6 +106,13 @@ export class EstuaryCredentials extends BaseScriptComponent implements IEstuaryC
     @hint("Override: Enter a specific User ID (leave empty to use Snap account ID)")
     @allowUndefined
     userIdField: string = "";
+
+    /** 
+     * Enable debug logging for all Estuary components.
+     */
+    @input
+    @hint("Enable debug logging for all Estuary components")
+    debugMode: boolean = true;
     
     /** The resolved user ID (from Snap account, manual input, or auto-generated) */
     private _resolvedUserId: string = "";
