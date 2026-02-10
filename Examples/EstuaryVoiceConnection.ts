@@ -493,35 +493,34 @@ export class SimpleAutoConnect extends BaseScriptComponent {
      * Disconnects after 10 minutes of no user activity.
      */
     private checkInactivityAndTick(): void {
+        const now = Date.now();
+
+        // ALWAYS process send queue — even during Connecting state.
+        // Protocol messages (pong "3", auth "40/sdk,...") get stuck in the queue
+        // with no tick() to drain them on Spectacles if we only tick when connected.
+        if (now - this.lastTickTime >= this.TICK_INTERVAL_MS) {
+            this.lastTickTime = now;
+            EstuaryManager.instance.tick();
+        }
+
+        // Inactivity check only applies when connected
         if (!this.character?.isConnected) {
             return;
         }
-        
-        const now = Date.now();
-        
+
         // Check for inactivity timeout (10 minutes)
         if (this.lastActivityTime > 0) {
             const inactiveTime = now - this.lastActivityTime;
             if (inactiveTime >= this.INACTIVITY_TIMEOUT_MS && !this.disconnectedDueToInactivity) {
                 this.disconnectedDueToInactivity = true;
-                
+
                 // Disable auto-reconnect so it stays disconnected
                 this.character.autoReconnect = false;
-                
+
                 this.logDisconnect("INACTIVITY TIMEOUT - No activity for 10 minutes");
                 this.character.disconnect();
                 return;
             }
-        }
-        
-        // Process send queue periodically to ensure ping/pong responses are sent
-        // This is critical because:
-        // 1. The SDK's send queue may have pending pong responses that need to be flushed
-        // 2. During silence (no voice), no audio is sent, so the queue may stall
-        // 3. This has zero API cost - just processes already-queued messages
-        if (now - this.lastTickTime >= this.TICK_INTERVAL_MS) {
-            this.lastTickTime = now;
-            EstuaryManager.instance.tick();
         }
     }
     

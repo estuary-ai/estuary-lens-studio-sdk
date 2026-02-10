@@ -30,6 +30,9 @@ const RECONNECT_DELAY_MS = 2000;
 /** Maximum number of reconnection attempts */
 const MAX_RECONNECT_ATTEMPTS = 5;
 
+/** Timeout for Engine.IO handshake before triggering reconnect */
+const ENGINEIO_HANDSHAKE_TIMEOUT_MS = 5000;
+
 /** Global reference to InternetModule for WebSocket creation */
 let _internetModule: any = null;
 
@@ -138,7 +141,8 @@ export class EstuaryClient extends EventEmitter<any> {
     private _engineIoOpenMs: number | null = null;
     private _namespaceConnectedMs: number | null = null;
     private _sessionInfoMs: number | null = null;
-    
+    private _handshakeTimeoutStartMs: number | null = null;
+
     // Send queue to prevent WebSocket message corruption
     // Lens Studio's WebSocket concatenates rapid sends into single packets!
     private _sendQueue: string[] = [];
@@ -228,6 +232,7 @@ export class EstuaryClient extends EventEmitter<any> {
      */
     disconnect(): void {
         if (this._disposed) return;
+        this._handshakeTimeoutStartMs = null;
 
         if (this._webSocket) {
             try {
@@ -428,6 +433,20 @@ export class EstuaryClient extends EventEmitter<any> {
      * This prevents connection timeouts during periods of silence.
      */
     tick(): void {
+        // Check Engine.IO handshake timeout
+        if (this._handshakeTimeoutStartMs !== null) {
+            const elapsed = Date.now() - this._handshakeTimeoutStartMs;
+            if (elapsed >= ENGINEIO_HANDSHAKE_TIMEOUT_MS) {
+                this._handshakeTimeoutStartMs = null;
+                this.logError(`Engine.IO handshake timed out after ${elapsed}ms - reconnecting`);
+                if (this._webSocket) {
+                    try { this._webSocket.close(); } catch (e) { /* ignore */ }
+                    this._webSocket = null;
+                }
+                this.handleReconnect();
+                return;
+            }
+        }
         this.processSendQueue();
     }
 
@@ -597,11 +616,13 @@ export class EstuaryClient extends EventEmitter<any> {
         this.logTiming('ws_open', now);
         this.log('WebSocket connected, waiting for Engine.IO handshake...');
         this._reconnectAttempts = 0;
+        this._handshakeTimeoutStartMs = now;
     }
 
     private handleWebSocketClose(): void {
         this.log('WebSocket closed');
-        
+        this._handshakeTimeoutStartMs = null;
+
         this.setState(ConnectionState.Disconnected);
         this._currentSession = null;
         this.emit('disconnected', 'connection closed');
@@ -643,17 +664,17 @@ export class EstuaryClient extends EventEmitter<any> {
         this.log(`Received: ${message.substring(0, 100)}${message.length > 100 ? '...' : ''}`);
 
         if (message.startsWith('0')) {
-            // Engine.IO open - now connect to namespace with auth
+            // Engine.IO open - now connect to namespace WITHOUT auth (deferred)
+            this._handshakeTimeoutStartMs = null;
             if (this._engineIoOpenMs === null) {
                 const now = Date.now();
                 this._engineIoOpenMs = now;
                 this.logTiming('engineio_open', now);
             }
-            this.log('Engine.IO connected, joining namespace...');
-            const authJson = JSON.stringify(this._auth);
-            this.log(`Sending auth payload: ${authJson}`);
-            // Use string concatenation instead of template literals for reliability
-            const connectMsg = '40' + this._namespace + ',' + authJson;
+            this.log('Engine.IO connected, joining namespace (deferred auth)...');
+            // Send namespace connect without auth — server accepts immediately,
+            // then we send auth as a separate event to avoid blocking the handshake.
+            const connectMsg = '40' + this._namespace;
             this.sendRaw(connectMsg);
         }
         else if (message.startsWith('2')) {
@@ -667,8 +688,10 @@ export class EstuaryClient extends EventEmitter<any> {
                 this._namespaceConnectedMs = now;
                 this.logTiming('namespace_connected', now);
             }
-            this.log('Namespace connected, waiting for session_info...');
-            // The server should send session_info event after successful auth
+            this.log('Namespace connected, sending deferred authenticate...');
+            // Send auth as a separate event — the server's on_sdk_authenticate handler
+            // processes this and sends session_info back.
+            this.emitSocketEvent('authenticate', this._auth);
         }
         else if (message.startsWith('44')) {
             // Socket.IO connect error
