@@ -81,12 +81,7 @@ export class ImageEndpointTest extends BaseScriptComponent {
     // ==================== Lifecycle ====================
     
     onAwake() {
-        print('');
-        print('╔═══════════════════════════════════════════════════════════════╗');
-        print('║          IMAGE ENDPOINT TEST - SPECTACLES                     ║');
-        print('║  This script tests the camera_image endpoint functionality   ║');
-        print('╚═══════════════════════════════════════════════════════════════╝');
-        print('');
+        print('[ImageEndpointTest] Initialized - tests camera_image endpoint');
         
         // Wait for manager to initialize
         this.createEvent('OnStartEvent').bind(() => {

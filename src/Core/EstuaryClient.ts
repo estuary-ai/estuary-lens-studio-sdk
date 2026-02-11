@@ -30,8 +30,8 @@ const RECONNECT_DELAY_MS = 2000;
 /** Maximum number of reconnection attempts */
 const MAX_RECONNECT_ATTEMPTS = 5;
 
-/** Timeout for Engine.IO handshake before triggering reconnect */
-const ENGINEIO_HANDSHAKE_TIMEOUT_MS = 5000;
+/** Timeout for Engine.IO handshake before triggering reconnect (safety net). */
+const ENGINEIO_HANDSHAKE_TIMEOUT_MS = 30000;
 
 /** Global reference to InternetModule for WebSocket creation */
 let _internetModule: any = null;
@@ -44,7 +44,6 @@ let _internetModule: any = null;
  */
 export function setInternetModule(module: any): void {
     _internetModule = module;
-    print('[EstuaryClient] InternetModule set');
 }
 
 /**
@@ -440,8 +439,17 @@ export class EstuaryClient extends EventEmitter<any> {
                 this._handshakeTimeoutStartMs = null;
                 this.logError(`Engine.IO handshake timed out after ${elapsed}ms - reconnecting`);
                 if (this._webSocket) {
-                    try { this._webSocket.close(); } catch (e) { /* ignore */ }
+                    // Replace event handlers with no-ops BEFORE closing to prevent
+                    // the stale onclose from firing handleWebSocketClose() on the new connection.
+                    // Lens Studio requires function types (not null) for event callbacks.
+                    const oldWs = this._webSocket;
                     this._webSocket = null;
+                    const noop = () => {};
+                    oldWs.onopen = noop;
+                    oldWs.onclose = noop;
+                    oldWs.onerror = noop;
+                    oldWs.onmessage = noop;
+                    try { oldWs.close(); } catch (e) { /* ignore */ }
                 }
                 this.handleReconnect();
                 return;
@@ -567,9 +575,33 @@ export class EstuaryClient extends EventEmitter<any> {
                 this.handleWebSocketError('WebSocket error');
             };
             ws.onmessage = (event: any) => {
-                // Lens Studio WebSocketMessageEvent has 'data' property
-                const message = typeof event === 'string' ? event : (event?.data || '');
-                this.handleWebSocketMessage(message);
+                try {
+                    // Extract message string from the event.
+                    // Lens Studio on Spectacles may deliver data as string, MessageEvent, or binary.
+                    let message: string;
+                    if (typeof event === 'string') {
+                        message = event;
+                    } else if (event?.data !== undefined) {
+                        if (typeof event.data === 'string') {
+                            message = event.data;
+                        } else {
+                            // Binary frame (ArrayBuffer/Uint8Array) — decode to string
+                            const bytes = new Uint8Array(event.data);
+                            const parts: string[] = [];
+                            for (let i = 0; i < bytes.length; i++) {
+                                parts.push(String.fromCharCode(bytes[i]));
+                            }
+                            message = parts.join('');
+                            this.log(`Decoded binary WS frame (${bytes.length} bytes)`);
+                        }
+                    } else {
+                        message = String(event);
+                    }
+                    this.handleWebSocketMessage(message);
+                } catch (e) {
+                    // MUST catch here — Lens Studio silently swallows errors in event callbacks
+                    print(`[EstuaryClient] ERROR in onmessage: ${e}`);
+                }
             };
             
             this.log('WebSocket event handlers assigned, connection should auto-open...');
@@ -855,13 +887,7 @@ export class EstuaryClient extends EventEmitter<any> {
         try {
             const requestId = data?.request_id || '';
             const text = data?.text;
-            print('');
-            print('📷 ========================================');
-            print('📷 CAMERA CAPTURE REQUEST FROM SERVER');
-            print(`📷 Request ID: ${requestId}`);
-            print(`📷 Context: ${text || '(none)'}`);
-            print('📷 ========================================');
-            print('');
+            this.log(`Camera capture request: ${requestId}${text ? `, context: ${text}` : ''}`);
             this.emit('cameraCaptureRequest', { request_id: requestId, text });
         } catch (e) {
             this.logError(`Failed to handle camera_capture_request: ${e}`);

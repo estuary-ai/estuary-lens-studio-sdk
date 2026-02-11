@@ -177,7 +177,7 @@ export class EstuaryCharacter
      */
     connect(): void {
         if (!this._characterId) {
-            print(`[EstuaryCharacter] Cannot connect: CharacterId is not set`);
+            this.logError('Cannot connect: CharacterId is not set');
             return;
         }
 
@@ -203,12 +203,12 @@ export class EstuaryCharacter
      */
     sendText(message: string): void {
         if (!this._isConnected) {
-            print(`[EstuaryCharacter] Cannot send text: not connected`);
+            this.logError('Cannot send text: not connected');
             return;
         }
 
         if (!message || message.trim().length === 0) {
-            print(`[EstuaryCharacter] Cannot send empty message`);
+            this.logError('Cannot send empty message');
             return;
         }
 
@@ -224,7 +224,7 @@ export class EstuaryCharacter
      */
     startVoiceSession(): void {
         if (!this._isConnected) {
-            print(`[EstuaryCharacter] Cannot start voice session: not connected`);
+            this.logError('Cannot start voice session: not connected');
             return;
         }
 
@@ -236,7 +236,7 @@ export class EstuaryCharacter
         // Tell server to start voice mode (enables Deepgram STT)
         EstuaryManager.instance.startVoiceMode();
 
-        print(`[EstuaryCharacter] Voice session started for ${this._characterId}`);
+        this.log(`Voice session started for ${this._characterId}`);
 
         // Start microphone if available
         if (this._microphone) {
@@ -253,7 +253,7 @@ export class EstuaryCharacter
         // Tell server to stop voice mode (saves STT costs)
         EstuaryManager.instance.stopVoiceMode();
 
-        print(`[EstuaryCharacter] Voice session ended for ${this._characterId}`);
+        this.log(`Voice session ended for ${this._characterId}`);
 
         // Stop microphone if available
         if (this._microphone) {
@@ -272,7 +272,7 @@ export class EstuaryCharacter
         
         if (!this._isVoiceSessionActive) {
             if (!this._voiceSessionWarningLogged) {
-                print('[EstuaryCharacter] ⚠️ Audio dropped: voice session not active! Call startVoiceSession() first.');
+                this.logError('Audio dropped: voice session not active. Call startVoiceSession() first.');
                 this._voiceSessionWarningLogged = true;
             }
             return;
@@ -310,7 +310,7 @@ export class EstuaryCharacter
         this._isConnected = true;
         this._currentSession = sessionInfo;
 
-        print(`[EstuaryCharacter] Connected: ${JSON.stringify(sessionInfo)}`);
+        this.log(`Connected: ${JSON.stringify(sessionInfo)}`);
 
         this.emit('connected', sessionInfo);
     }
@@ -320,13 +320,13 @@ export class EstuaryCharacter
         this._currentSession = null;
         this._isVoiceSessionActive = false;
 
-        print(`[EstuaryCharacter] Disconnected: ${reason}`);
+        this.log(`Disconnected: ${reason}`);
 
         this.emit('disconnected');
 
         // Auto-reconnect if enabled
         if (this._autoReconnect && reason !== 'client disconnect') {
-            print(`[EstuaryCharacter] Auto-reconnecting...`);
+            this.log('Auto-reconnecting...');
             this.connect();
         }
     }
@@ -387,7 +387,7 @@ export class EstuaryCharacter
     }
 
     handleError(error: string): void {
-        print(`[EstuaryCharacter] Error: ${error}`);
+        this.logError(error);
         this.emit('error', error);
     }
 
@@ -396,13 +396,7 @@ export class EstuaryCharacter
     }
 
     handleCameraCaptureRequest(request: CameraCaptureRequest): void {
-        print('');
-        print('📷 ========================================');
-        print('📷 CAMERA CAPTURE REQUESTED!');
-        print(`📷 Subscribe to 'cameraCaptureRequest' event to handle this.`);
-        print(`📷 Then call sendCameraImage() with the captured image.`);
-        print('📷 ========================================');
-        print('');
+        this.log(`Camera capture requested: ${request.request_id}`);
         this.emit('cameraCaptureRequest', request);
     }
 
@@ -412,6 +406,18 @@ export class EstuaryCharacter
         const timestamp = Date.now().toString(36);
         const random = Math.random().toString(36).substring(2, 10);
         return `player_${timestamp}_${random}`;
+    }
+
+    // ==================== Logging ====================
+
+    private log(message: string): void {
+        if (EstuaryManager.hasInstance && EstuaryManager.instance.debugLogging) {
+            print(`[EstuaryCharacter] ${message}`);
+        }
+    }
+
+    private logError(message: string): void {
+        print(`[EstuaryCharacter] ERROR: ${message}`);
     }
 }
 

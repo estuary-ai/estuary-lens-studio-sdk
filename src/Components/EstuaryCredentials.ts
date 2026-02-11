@@ -369,6 +369,7 @@ export class EstuaryCredentials extends BaseScriptComponent implements IEstuaryC
      * @param source Description of where the User ID came from
      */
     private printUserIdBanner(source: string): void {
+        if (!this.debugMode) return;
         print("╔════════════════════════════════════════════════════════════╗");
         print("║  ESTUARY USER ID                                           ║");
         print("║  " + this._resolvedUserId.padEnd(58) + "║");

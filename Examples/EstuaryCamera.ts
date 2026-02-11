@@ -238,14 +238,7 @@ export class CameraCapture extends BaseScriptComponent {
             return;
         }
         
-        print('');
-        print('================================================');
-        print('CAMERA CAPTURE REQUEST RECEIVED!');
-        print(`Request ID: ${request.request_id}`);
-        print(`Context: ${request.text || '(none)'}`);
-        print('Capturing high-resolution still image...');
-        print('================================================');
-        print('');
+        this.log(`Camera capture request: ${request.request_id}${request.text ? `, context: ${request.text}` : ''}`);
         
         this._pendingRequest = request;
         this._isCapturing = true;
@@ -346,11 +339,7 @@ export class CameraCapture extends BaseScriptComponent {
             this._pendingRequest?.text
         );
         
-        print('');
-        print('================================================');
-        print('IMAGE SENT TO SERVER FOR ANALYSIS!');
-        print('================================================');
-        print('');
+        this.log('Image sent to server for analysis');
         
         this._pendingRequest = null;
         this._isCapturing = false;

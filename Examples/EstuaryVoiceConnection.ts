@@ -279,14 +279,12 @@ export class SimpleAutoConnect extends BaseScriptComponent {
                 // Initialize with sample rate - this starts the AudioComponent
                 this.dynamicAudioOutput.initialize(this.audioSampleRate);
                 this.audioInitialized = true;
-                print(`[SimpleAutoConnect] ✅ DynamicAudioOutput configured (${this.audioSampleRate}Hz)`);
+                this.log(`DynamicAudioOutput configured (${this.audioSampleRate}Hz)`);
             } else {
-                print("[SimpleAutoConnect] ⚠️ WARNING: Could not find DynamicAudioOutput script on object");
-                print("[SimpleAutoConnect] Make sure the DynamicAudioOutput script is attached");
+                print("[SimpleAutoConnect] WARNING: Could not find DynamicAudioOutput script on object");
             }
         } else {
-            print("[SimpleAutoConnect] ⚠️ WARNING: No dynamicAudioOutputObject configured - voice responses won't be played");
-            print("[SimpleAutoConnect] Add DynamicAudioOutput script to a SceneObject and connect it");
+            print("[SimpleAutoConnect] WARNING: No dynamicAudioOutputObject configured - voice responses won't be played");
         }
         
         // Create microphone (VAD is handled by Deepgram backend)
@@ -295,55 +293,52 @@ export class SimpleAutoConnect extends BaseScriptComponent {
         
         // Set up microphone - prefer MicrophoneRecorder (event-based, recommended)
         if (this.microphoneRecorderObject) {
-            print("[SimpleAutoConnect] microphoneRecorderObject input detected, searching for MicrophoneRecorder...");
+            this.log('Searching for MicrophoneRecorder...');
             
             const sceneObj = this.microphoneRecorderObject;
             let micRecorder: MicrophoneRecorder | null = null;
             
             // Get all script components on the SceneObject
             const componentCount = sceneObj.getComponentCount("Component.ScriptComponent");
-            print(`[SimpleAutoConnect] Found ${componentCount} ScriptComponent(s) on object`);
+            this.log(`Found ${componentCount} ScriptComponent(s) on object`);
             
             for (let i = 0; i < componentCount; i++) {
                 const scriptComp = sceneObj.getComponentByIndex("Component.ScriptComponent", i) as any;
                 if (scriptComp) {
-                    // Log what we find
-                    print(`[SimpleAutoConnect] Script ${i}: checking for MicrophoneRecorder API...`);
-                    
                     // Check if this script has onAudioFrame (MicrophoneRecorder signature)
                     if (scriptComp.onAudioFrame && typeof scriptComp.startRecording === 'function') {
-                        print("[SimpleAutoConnect] ✅ Found MicrophoneRecorder directly on script component");
+                        this.log('Found MicrophoneRecorder directly on script component');
                         micRecorder = scriptComp as MicrophoneRecorder;
                         break;
                     }
                     
                     // Check .api property
                     if (scriptComp.api && scriptComp.api.onAudioFrame) {
-                        print("[SimpleAutoConnect] ✅ Found MicrophoneRecorder via .api property");
+                        this.log('Found MicrophoneRecorder via .api property');
                         micRecorder = scriptComp.api as MicrophoneRecorder;
                         break;
                     }
                     
                     // Log available properties for debugging
-                    const props: string[] = [];
-                    for (const key in scriptComp) {
-                        props.push(key);
+                    if (this.credentials?.debugMode) {
+                        const props: string[] = [];
+                        for (const key in scriptComp) {
+                            props.push(key);
+                        }
+                        this.log(`Script ${i} properties: ${props.slice(0, 10).join(', ')}${props.length > 10 ? '...' : ''}`);
                     }
-                    print(`[SimpleAutoConnect] Script ${i} properties: ${props.slice(0, 10).join(', ')}${props.length > 10 ? '...' : ''}`);
                 }
             }
             
             if (micRecorder) {
                 this.microphone.setMicrophoneRecorder(micRecorder);
                 this.character.microphone = this.microphone;
-                print("[SimpleAutoConnect] ✅ MicrophoneRecorder configured successfully");
+                this.log('MicrophoneRecorder configured successfully');
             } else {
-                print("[SimpleAutoConnect] ❌ ERROR: Could not find MicrophoneRecorder API on any script component");
-                print("[SimpleAutoConnect] Make sure the MicrophoneRecorder script is attached to this object");
+                print("[SimpleAutoConnect] ERROR: Could not find MicrophoneRecorder API on any script component");
             }
         } else {
-            print("[SimpleAutoConnect] ❌ ERROR: No microphoneRecorderObject configured!");
-            print("[SimpleAutoConnect] Add MicrophoneRecorder from RemoteServiceGateway.lspkg to your scene");
+            print("[SimpleAutoConnect] ERROR: No microphoneRecorderObject configured!");
         }
         
         // Set up event handlers
@@ -392,10 +387,7 @@ export class SimpleAutoConnect extends BaseScriptComponent {
         
         // Connected - start streaming mic immediately
         this.character.on('connected', (session: SessionInfo) => {
-            print("===========================================");
-            print("  Connected! Starting mic stream...");
-            print(`  Session: ${session.sessionId}`);
-            print("===========================================");
+            this.log(`Connected! Session: ${session.sessionId}`);
             
             // Initialize activity tracking
             this.recordActivity();
@@ -534,20 +526,10 @@ export class SimpleAutoConnect extends BaseScriptComponent {
     }
     
     /**
-     * Display a very obvious disconnect log.
+     * Log a disconnect event.
      */
     private logDisconnect(reason: string): void {
-        print("");
-        print("╔══════════════════════════════════════════════════════════════════╗");
-        print("║                                                                  ║");
-        print("║   ⚠️  ESTUARY SDK DISCONNECTED  ⚠️                                ║");
-        print("║                                                                  ║");
-        print("╠══════════════════════════════════════════════════════════════════╣");
-        print(`║   Reason: ${reason.padEnd(54)}║`);
-        print(`║   Time: ${new Date().toISOString().padEnd(56)}║`);
-        print("║                                                                  ║");
-        print("╚══════════════════════════════════════════════════════════════════╝");
-        print("");
+        print(`[SimpleAutoConnect] Disconnected: ${reason}`);
     }
     
     // ==================== Public Methods ====================
