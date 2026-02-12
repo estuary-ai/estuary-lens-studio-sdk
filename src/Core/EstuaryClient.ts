@@ -31,7 +31,7 @@ const RECONNECT_DELAY_MS = 2000;
 const MAX_RECONNECT_ATTEMPTS = 5;
 
 /** Timeout for Engine.IO handshake before triggering reconnect */
-const ENGINEIO_HANDSHAKE_TIMEOUT_MS = 5000;
+const ENGINEIO_HANDSHAKE_TIMEOUT_MS = 10000;
 
 /** Global reference to InternetModule for WebSocket creation */
 let _internetModule: any = null;
@@ -189,6 +189,15 @@ export class EstuaryClient extends EventEmitter<any> {
 
     set debugLogging(value: boolean) {
         this._config.debugLogging = value;
+    }
+
+    /** Whether to automatically reconnect when the connection is lost */
+    get autoReconnect(): boolean {
+        return this._config.autoReconnect;
+    }
+
+    set autoReconnect(value: boolean) {
+        this._config.autoReconnect = value;
     }
 
     // ==================== Public Methods ====================
@@ -664,17 +673,17 @@ export class EstuaryClient extends EventEmitter<any> {
         this.log(`Received: ${message.substring(0, 100)}${message.length > 100 ? '...' : ''}`);
 
         if (message.startsWith('0')) {
-            // Engine.IO open - now connect to namespace WITHOUT auth (deferred)
+            // Engine.IO open - connect to namespace WITH auth (single round trip)
             this._handshakeTimeoutStartMs = null;
             if (this._engineIoOpenMs === null) {
                 const now = Date.now();
                 this._engineIoOpenMs = now;
                 this.logTiming('engineio_open', now);
             }
-            this.log('Engine.IO connected, joining namespace (deferred auth)...');
-            // Send namespace connect without auth — server accepts immediately,
-            // then we send auth as a separate event to avoid blocking the handshake.
-            const connectMsg = '40' + this._namespace;
+            this.log('Engine.IO connected, joining namespace with auth...');
+            // Send namespace connect with auth payload — server authenticates
+            // during connect, saving a full round trip vs deferred authenticate.
+            const connectMsg = '40' + this._namespace + ',' + JSON.stringify(this._auth);
             this.sendRaw(connectMsg);
         }
         else if (message.startsWith('2')) {
@@ -682,16 +691,13 @@ export class EstuaryClient extends EventEmitter<any> {
             this.sendRaw('3');
         }
         else if (message.startsWith('40' + this._namespace) || message.startsWith('40,')) {
-            // Socket.IO namespace connected
+            // Socket.IO namespace connected — auth was already sent during connect
             if (this._namespaceConnectedMs === null) {
                 const now = Date.now();
                 this._namespaceConnectedMs = now;
                 this.logTiming('namespace_connected', now);
             }
-            this.log('Namespace connected, sending deferred authenticate...');
-            // Send auth as a separate event — the server's on_sdk_authenticate handler
-            // processes this and sends session_info back.
-            this.emitSocketEvent('authenticate', this._auth);
+            this.log('Namespace connected (auth sent during connect)');
         }
         else if (message.startsWith('44')) {
             // Socket.IO connect error
