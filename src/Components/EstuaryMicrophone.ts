@@ -150,14 +150,15 @@ export class EstuaryMicrophone
     setMicrophoneRecorder(recorder: MicrophoneRecorder): void {
         this._microphoneRecorder = recorder;
         
-        this.log('Setting up MicrophoneRecorder...');
+        print('[EstuaryMicrophone] ========================================');
+        print('[EstuaryMicrophone] Setting up MicrophoneRecorder...');
         
         // Set sample rate to match Deepgram requirements
         if (typeof recorder.setSampleRate === 'function') {
             recorder.setSampleRate(this._sampleRate);
-            this.log(`Set sample rate to ${this._sampleRate}Hz`);
+            print(`[EstuaryMicrophone] Set sample rate to ${this._sampleRate}Hz`);
         } else {
-            print(`[EstuaryMicrophone] WARNING: setSampleRate not available, using default`);
+            print(`[EstuaryMicrophone] ⚠️ setSampleRate not available, using default`);
         }
         
         // Subscribe to audio frame events
@@ -165,13 +166,14 @@ export class EstuaryMicrophone
             recorder.onAudioFrame.add((audioFrame: Float32Array) => {
                 this.handleAudioFrame(audioFrame);
             });
-            this.log('Subscribed to onAudioFrame events');
+            print('[EstuaryMicrophone] ✅ Subscribed to onAudioFrame events');
         } else {
-            print('[EstuaryMicrophone] ERROR: onAudioFrame.add not available!');
+            print('[EstuaryMicrophone] ❌ ERROR: onAudioFrame.add not available!');
             return;
         }
         
-        this.log('MicrophoneRecorder configured');
+        print('[EstuaryMicrophone] ✅ MicrophoneRecorder configured');
+        print('[EstuaryMicrophone] ========================================');
     }
 
     /**
@@ -184,7 +186,7 @@ export class EstuaryMicrophone
         }
 
         if (!this._microphoneRecorder) {
-            print('[EstuaryMicrophone] ERROR: MicrophoneRecorder not set! Call setMicrophoneRecorder() first.');
+            print('[EstuaryMicrophone] ❌ ERROR: MicrophoneRecorder not set! Call setMicrophoneRecorder() first.');
             return;
         }
 
@@ -195,7 +197,7 @@ export class EstuaryMicrophone
         this._pendingAudioBuffer = null;
         
         this._microphoneRecorder.startRecording();
-        this.log('Started recording');
+        print('[EstuaryMicrophone] ✅ Started recording');
         this.emit('recordingStarted');
     }
 
@@ -215,10 +217,10 @@ export class EstuaryMicrophone
         
         // Log final stats
         if (this._chunksSent > 0) {
-            this.log(`Recording stats: sent=${this._chunksSent}, frames=${this._frameCount}, withAudio=${this._framesWithAudio}`);
+            print(`[EstuaryMicrophone] Recording stats: sent=${this._chunksSent}, frames=${this._frameCount}, withAudio=${this._framesWithAudio}`);
         }
         
-        this.log('Stopped recording');
+        print('[EstuaryMicrophone] Stopped recording');
         this.emit('recordingStopped');
     }
 
@@ -250,18 +252,28 @@ export class EstuaryMicrophone
      * Handle audio frame from MicrophoneRecorder event.
      */
     private handleAudioFrame(audioFrame: Float32Array): void {
+        // Log first frame unconditionally for diagnostics (even if not recording)
+        if (this._frameCount === 0 && !this._isRecording) {
+            print(`[EstuaryMicrophone] DIAG: onAudioFrame fired but _isRecording=false, frame exists=${!!audioFrame}, length=${audioFrame?.length || 0}`);
+        }
+
         if (!this._isRecording) {
             return;
         }
-        
+
         this._frameCount++;
+
+        // One-time diagnostic log on first frame while recording
+        if (this._frameCount === 1) {
+            print(`[EstuaryMicrophone] DIAG: First audio frame while recording — length=${audioFrame?.length || 0}, isRecording=${this._isRecording}`);
+        }
         
         if (audioFrame && audioFrame.length > 0) {
             this._framesWithAudio++;
             
             // Debug logging every 100 frames
             if (this._debugLogging && this._frameCount % 100 === 0) {
-                this.log(`Frame ${this._frameCount}: ${audioFrame.length} samples`);
+                print(`[EstuaryMicrophone] Frame ${this._frameCount}: ${audioFrame.length} samples`);
             }
             
             // Send audio to backend
@@ -275,8 +287,8 @@ export class EstuaryMicrophone
      */
     private sendAudioToBackend(samples: Float32Array): void {
         if (!this._targetCharacter || !this._targetCharacter.isConnected) {
-            if (this._debugLogging && this._chunksSent === 0) {
-                this.log('Not connected, skipping audio chunk');
+            if (this._chunksSent === 0) {
+                print(`[EstuaryMicrophone] DIAG: Audio not sent — targetCharacter=${!!this._targetCharacter}, isConnected=${this._targetCharacter?.isConnected}`);
             }
             return;
         }
@@ -318,12 +330,12 @@ export class EstuaryMicrophone
         
         // Log first chunk to confirm audio is being sent
         if (this._chunksSent === 1) {
-            this.log(`First audio chunk sent: ${finalAudio.length} samples @ ${this._sampleRate}Hz, base64 length=${base64Audio.length}`);
+            print(`[EstuaryMicrophone] ✅ First audio chunk sent: ${finalAudio.length} samples @ ${this._sampleRate}Hz, base64 length=${base64Audio.length}`);
         }
         
         // Log every 20 chunks
         if (this._debugLogging && this._chunksSent % 20 === 0) {
-            this.log(`Stats: sent=${this._chunksSent}, frames=${this._frameCount}`);
+            print(`[EstuaryMicrophone] Stats: sent=${this._chunksSent}, frames=${this._frameCount}`);
         }
 
         // Send to character

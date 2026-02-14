@@ -1,9 +1,14 @@
 /**
- * Low-level WebSocket client for communicating with Estuary servers.
+ * Low-level client for communicating with Estuary servers.
  * Implements Socket.IO v4 protocol over Lens Studio's WebSocket API.
- * 
- * This class handles the WebSocket connection and Socket.IO message parsing
- * for Lens Studio which has its own WebSocket implementation.
+ *
+ * Uses a polling-first connection strategy to work around a Spectacles platform
+ * bug where unsolicited server→client WebSocket frames are not delivered:
+ *   1. HTTP GET fetches the Engine.IO OPEN packet (gets session ID)
+ *   2. WebSocket opens with the session ID
+ *   3. Client sends "2probe" first (activates Spectacles' frame parser)
+ *   4. Server responds "3probe", client sends "5" (UPGRADE), then joins namespace
+ * Falls back to direct WebSocket if HTTP polling is unavailable.
  */
 
 import { 
@@ -24,14 +29,8 @@ import { InterruptData, parseInterruptData } from '../Models/InterruptData';
 /** Socket.IO namespace for SDK connections */
 const SDK_NAMESPACE = '/sdk';
 
-/** Delay between reconnection attempts in ms */
-const RECONNECT_DELAY_MS = 2000;
-
-/** Maximum number of reconnection attempts */
-const MAX_RECONNECT_ATTEMPTS = 5;
-
-/** Timeout for Engine.IO handshake before triggering reconnect (safety net). */
-const ENGINEIO_HANDSHAKE_TIMEOUT_MS = 30000;
+/** Timeout for Engine.IO handshake before triggering reconnect */
+const ENGINEIO_HANDSHAKE_TIMEOUT_MS = 10000;
 
 /** Global reference to InternetModule for WebSocket creation */
 let _internetModule: any = null;
@@ -44,6 +43,7 @@ let _internetModule: any = null;
  */
 export function setInternetModule(module: any): void {
     _internetModule = module;
+    print('[EstuaryClient] InternetModule set');
 }
 
 /**
@@ -141,6 +141,8 @@ export class EstuaryClient extends EventEmitter<any> {
     private _namespaceConnectedMs: number | null = null;
     private _sessionInfoMs: number | null = null;
     private _handshakeTimeoutStartMs: number | null = null;
+    private _engineIoSid: string | null = null;
+    private _isUpgrading: boolean = false;
 
     // Send queue to prevent WebSocket message corruption
     // Lens Studio's WebSocket concatenates rapid sends into single packets!
@@ -190,6 +192,15 @@ export class EstuaryClient extends EventEmitter<any> {
         this._config.debugLogging = value;
     }
 
+    /** Whether to automatically reconnect when the connection is lost */
+    get autoReconnect(): boolean {
+        return this._config.autoReconnect;
+    }
+
+    set autoReconnect(value: boolean) {
+        this._config.autoReconnect = value;
+    }
+
     // ==================== Public Methods ====================
 
     /**
@@ -232,6 +243,10 @@ export class EstuaryClient extends EventEmitter<any> {
     disconnect(): void {
         if (this._disposed) return;
         this._handshakeTimeoutStartMs = null;
+        this._engineIoSid = null;
+        this._isUpgrading = false;
+        this._sendQueue = [];
+        this._isSending = false;
 
         if (this._webSocket) {
             try {
@@ -439,17 +454,8 @@ export class EstuaryClient extends EventEmitter<any> {
                 this._handshakeTimeoutStartMs = null;
                 this.logError(`Engine.IO handshake timed out after ${elapsed}ms - reconnecting`);
                 if (this._webSocket) {
-                    // Replace event handlers with no-ops BEFORE closing to prevent
-                    // the stale onclose from firing handleWebSocketClose() on the new connection.
-                    // Lens Studio requires function types (not null) for event callbacks.
-                    const oldWs = this._webSocket;
+                    try { this._webSocket.close(); } catch (e) { /* ignore */ }
                     this._webSocket = null;
-                    const noop = () => {};
-                    oldWs.onopen = noop;
-                    oldWs.onclose = noop;
-                    oldWs.onerror = noop;
-                    oldWs.onmessage = noop;
-                    try { oldWs.close(); } catch (e) { /* ignore */ }
                 }
                 this.handleReconnect();
                 return;
@@ -491,72 +497,172 @@ export class EstuaryClient extends EventEmitter<any> {
     private connectInternal(): void {
         this.setState(ConnectionState.Connecting);
         this.resetConnectionTimings();
+        this._engineIoSid = null;
+        this._isUpgrading = false;
+        this._sendQueue = [];
+        this._isSending = false;
+        this._lastSendTime = 0;
+
+        // Store auth for namespace connection
+        // Include audio_sample_rate to tell server what TTS sample rate to use
+        this._auth = {
+            api_key: this._config.apiKey,
+            character_id: this._config.characterId,
+            player_id: this._config.playerId,
+            audio_sample_rate: this._config.playbackSampleRate || 16000  // Default 16kHz for Spectacles
+        };
+
+        this.log(`Authenticating with player_id: ${this._config.playerId}`);
+
+        // Start handshake timeout (covers both polling and WebSocket phases)
+        this._handshakeTimeoutStartMs = Date.now();
+
+        // Phase 1: Fetch OPEN packet via HTTP polling (bypasses Spectacles WebSocket onmessage bug)
+        this.fetchOpenViaPolling();
+    }
+
+    /**
+     * Phase 1: Fetch the Engine.IO OPEN packet via HTTP long-polling.
+     * This bypasses a Spectacles platform bug where unsolicited server→client
+     * WebSocket frames are not delivered until the client sends first.
+     */
+    private fetchOpenViaPolling(): void {
+        const pollingUrl = this.buildPollingUrl();
+        this.log('Phase 1: Fetching OPEN packet via HTTP polling...');
+        this.log(`Polling URL: ${pollingUrl}`);
 
         try {
-            // Build WebSocket URL
-            const wsUrl = this.buildWebSocketUrl();
-            
-            // Store auth for namespace connection
-            // Include audio_sample_rate to tell server what TTS sample rate to use
-            this._auth = {
-                api_key: this._config.apiKey,
-                character_id: this._config.characterId,
-                player_id: this._config.playerId,
-                audio_sample_rate: this._config.playbackSampleRate || 16000  // Default 16kHz for Spectacles
-            };
+            // Check if HTTP requests are available on this platform
+            // @ts-ignore - Lens Studio global API
+            if (typeof RemoteServiceHttpRequest === 'undefined' || !_internetModule || typeof _internetModule.performHttpRequest !== 'function') {
+                this.log('HTTP polling not available, falling back to direct WebSocket');
+                this.connectWebSocketDirect();
+                return;
+            }
 
+            // @ts-ignore - Lens Studio global API
+            const request = RemoteServiceHttpRequest.create();
+            request.url = pollingUrl;
+            // @ts-ignore - Lens Studio enum
+            request.method = RemoteServiceHttpRequest.HttpRequestMethod.Get;
+
+            _internetModule.performHttpRequest(request, (response: any) => {
+                try {
+                    const statusCode = response.statusCode || response.code || 0;
+                    const body = response.body || '';
+                    this.log(`Polling response: status=${statusCode}, body=${body.substring(0, 200)}`);
+
+                    if (statusCode >= 200 && statusCode < 300 && body.length > 0) {
+                        // Parse Engine.IO OPEN packet: 0{"sid":"...","upgrades":[...],...}
+                        if (!body.startsWith('0')) {
+                            this.logError(`Unexpected polling response format: ${body.substring(0, 100)}`);
+                            this.connectWebSocketDirect();
+                            return;
+                        }
+
+                        const jsonStart = body.indexOf('{');
+                        if (jsonStart < 0) {
+                            this.logError(`No JSON in polling response: ${body.substring(0, 100)}`);
+                            this.connectWebSocketDirect();
+                            return;
+                        }
+
+                        const openData = JSON.parse(body.substring(jsonStart));
+                        const sid = openData.sid;
+
+                        if (!sid) {
+                            this.logError('No sid in OPEN packet');
+                            this.connectWebSocketDirect();
+                            return;
+                        }
+
+                        this._engineIoSid = sid;
+                        this.log(`OPEN received via polling: sid=${sid}`);
+
+                        // Phase 2: Upgrade to WebSocket with the session ID
+                        this.connectWebSocketWithSid(sid);
+                    } else {
+                        this.logError(`Polling failed: status=${statusCode}`);
+                        this.connectWebSocketDirect();
+                    }
+                } catch (parseError) {
+                    this.logError(`Failed to parse polling response: ${parseError}`);
+                    this.connectWebSocketDirect();
+                }
+            });
+        } catch (e: any) {
+            this.logError(`HTTP polling request failed: ${e}`);
+            this.connectWebSocketDirect();
+        }
+    }
+
+    /**
+     * Phase 2: Open a WebSocket with the session ID from polling.
+     * The client sends `2probe` first, which activates Spectacles' frame parser.
+     */
+    private connectWebSocketWithSid(sid: string): void {
+        const wsUrl = this.buildWebSocketUrl(sid);
+        this.log(`Phase 2: Upgrading to WebSocket with sid=${sid}`);
+        this._isUpgrading = true;
+        this.createAndSetupWebSocket(wsUrl);
+    }
+
+    /**
+     * Fallback: Connect directly via WebSocket without polling.
+     * Used when HTTP requests aren't available on the platform.
+     */
+    private connectWebSocketDirect(): void {
+        const wsUrl = this.buildWebSocketUrl();
+        this.log('Connecting directly via WebSocket (no polling)...');
+        this._isUpgrading = false;
+        this._engineIoSid = null;
+        this.createAndSetupWebSocket(wsUrl);
+    }
+
+    /**
+     * Create a WebSocket and wire up event handlers.
+     * Shared by both the polling-upgrade and direct-connect paths.
+     */
+    private createAndSetupWebSocket(wsUrl: string): void {
+        try {
             this.log(`Connecting to ${wsUrl}...`);
-            this.log(`Authenticating with player_id: ${this._config.playerId}`);
 
             // Create WebSocket connection using Lens Studio's InternetModule
-            // Note: As of Lens Studio 5.9, createWebSocket was moved from RemoteServiceModule to InternetModule
             let ws: any = null;
-            
-            // Try to create WebSocket using InternetModule
-            if (_internetModule) {
-                if (typeof _internetModule.createWebSocket === 'function') {
-                    this.log('Using InternetModule.createWebSocket()');
-                    ws = _internetModule.createWebSocket(wsUrl);
-                }
+
+            if (_internetModule && typeof _internetModule.createWebSocket === 'function') {
+                ws = _internetModule.createWebSocket(wsUrl);
             }
-            
+
             if (!ws) {
                 throw new Error('WebSocket creation failed. Make sure InternetModule is connected. (Use setInternetModule() before connecting)');
             }
 
             this._webSocket = ws;
 
-            // Set up Lens Studio WebSocket event handlers
-            this.log('Setting up WebSocket event handlers...');
-            
             // Lens Studio InternetModule WebSocket uses standard Web API naming (lowercase):
             // onopen, onclose, onerror, onmessage
-            // These are assigned as callbacks, not addEventListener
             ws.onopen = (event: any) => {
                 this.log('WebSocket onopen fired');
                 this.handleWebSocketOpen();
             };
             ws.onclose = (event: any) => {
-                // Log detailed close information
                 const code = event?.code || event?.closeCode || 'unknown';
                 const reason = event?.reason || event?.closeReason || 'no reason provided';
                 const wasClean = event?.wasClean !== undefined ? event.wasClean : 'unknown';
                 this.log(`WebSocket onclose fired - Code: ${code}, Reason: ${reason}, Clean: ${wasClean}`);
-                
-                // Log what close codes mean
+
                 const codeExplanation = this.getCloseCodeExplanation(code);
                 if (codeExplanation) {
                     this.log(`Close code ${code} means: ${codeExplanation}`);
                 }
-                
+
                 this.handleWebSocketClose();
             };
             ws.onerror = (event: any) => {
-                // Try to extract error details
                 const errorMsg = event?.message || event?.error || event?.type || 'unknown error';
                 this.log(`WebSocket onerror fired - Details: ${errorMsg}`);
-                
-                // Log all properties of the error event for debugging
+
                 if (this._config.debugLogging) {
                     const props: string[] = [];
                     for (const key in event) {
@@ -571,44 +677,33 @@ export class EstuaryClient extends EventEmitter<any> {
                         this.log(`Error event properties: ${props.join(', ')}`);
                     }
                 }
-                
+
                 this.handleWebSocketError('WebSocket error');
             };
             ws.onmessage = (event: any) => {
                 try {
-                    // Extract message string from the event.
-                    // Lens Studio on Spectacles may deliver data as string, MessageEvent, or binary.
                     let message: string;
                     if (typeof event === 'string') {
                         message = event;
-                    } else if (event?.data !== undefined) {
-                        if (typeof event.data === 'string') {
-                            message = event.data;
-                        } else {
-                            // Binary frame (ArrayBuffer/Uint8Array) — decode to string
-                            const bytes = new Uint8Array(event.data);
-                            const parts: string[] = [];
-                            for (let i = 0; i < bytes.length; i++) {
-                                parts.push(String.fromCharCode(bytes[i]));
-                            }
-                            message = parts.join('');
-                            this.log(`Decoded binary WS frame (${bytes.length} bytes)`);
-                        }
+                    } else if (typeof event?.data === 'string') {
+                        message = event.data;
+                    } else if (event?.data != null) {
+                        this.log(`onmessage data is non-string: type=${typeof event.data}, constructor=${event.data?.constructor?.name || 'unknown'}`);
+                        message = String(event.data);
                     } else {
-                        message = String(event);
+                        this.log(`onmessage event has no usable data: ${JSON.stringify(event)}`);
+                        return;
                     }
+
                     this.handleWebSocketMessage(message);
-                } catch (e) {
-                    // MUST catch here — Lens Studio silently swallows errors in event callbacks
-                    print(`[EstuaryClient] ERROR in onmessage: ${e}`);
+                } catch (e: any) {
+                    this.logError(`onmessage handler error: ${String(e)}`);
                 }
             };
-            
-            this.log('WebSocket event handlers assigned, connection should auto-open...');
 
         } catch (e: any) {
             const errorMsg = String(e);
-            
+
             // Check if this is the simulator limitation error
             if (errorMsg.includes('not available on the simulated platform')) {
                 this.logError('=======================================================');
@@ -616,14 +711,14 @@ export class EstuaryClient extends EventEmitter<any> {
                 this.logError('This only works on actual Spectacles hardware.');
                 this.logError('Deploy your Lens to test WebSocket features.');
                 this.logError('=======================================================');
-                
+
                 // Don't retry - this will never work in simulator
                 this._reconnectAttempts = this._config.maxReconnectAttempts;
                 this.setState(ConnectionState.Error);
                 this.emit('error', 'WebSocket not available in Preview. Deploy to Spectacles to test.');
                 return;
             }
-            
+
             this.logError(`Connection failed: ${e}`);
             this.setState(ConnectionState.Error);
             this.emit('error', String(e));
@@ -631,24 +726,47 @@ export class EstuaryClient extends EventEmitter<any> {
         }
     }
 
-    private buildWebSocketUrl(): string {
+    private buildWebSocketUrl(sid?: string): string {
         // Convert HTTP(S) to WS(S)
         let wsUrl = this._config.serverUrl
             .replace('https://', 'wss://')
             .replace('http://', 'ws://');
 
-        // Add Socket.IO path and query params
         // EIO=4 for Engine.IO v4 (Socket.IO v4)
-        return `${wsUrl}/socket.io/?EIO=4&transport=websocket`;
+        let url = `${wsUrl}/socket.io/?EIO=4&transport=websocket`;
+        if (sid) {
+            url += `&sid=${encodeURIComponent(sid)}`;
+        }
+        return url;
+    }
+
+    private buildPollingUrl(): string {
+        // Use HTTPS for HTTP long-polling
+        let httpUrl = this._config.serverUrl;
+        // Ensure HTTPS (not WS)
+        httpUrl = httpUrl.replace('wss://', 'https://').replace('ws://', 'http://');
+
+        return `${httpUrl}/socket.io/?EIO=4&transport=polling`;
     }
 
     private handleWebSocketOpen(): void {
         const now = Date.now();
         this._wsOpenMs = now;
         this.logTiming('ws_open', now);
-        this.log('WebSocket connected, waiting for Engine.IO handshake...');
+
         this._reconnectAttempts = 0;
-        this._handshakeTimeoutStartMs = now;
+
+        if (this._isUpgrading && this._engineIoSid) {
+            // Polling-first flow: send probe to activate Spectacles' frame parser.
+            // This is the client's first WebSocket send, which triggers the platform
+            // to start delivering server→client frames.
+            this.log('WebSocket connected, sending upgrade probe...');
+            this.sendRaw('2probe');
+        } else {
+            // Direct WebSocket flow (fallback): wait for Engine.IO OPEN packet
+            this.log('WebSocket connected, waiting for Engine.IO handshake...');
+            this._handshakeTimeoutStartMs = now;
+        }
     }
 
     private handleWebSocketClose(): void {
@@ -695,18 +813,44 @@ export class EstuaryClient extends EventEmitter<any> {
     private processSocketIOMessage(message: string): void {
         this.log(`Received: ${message.substring(0, 100)}${message.length > 100 ? '...' : ''}`);
 
-        if (message.startsWith('0')) {
-            // Engine.IO open - now connect to namespace WITHOUT auth (deferred)
+        if (message === '3probe') {
+            // Engine.IO PONG probe — upgrade handshake succeeded.
+            // Server confirmed it received our 2probe and responded with 3probe.
+            this.log('Upgrade probe confirmed, completing upgrade...');
+            this.sendRaw('5');  // Engine.IO UPGRADE packet
+            this._isUpgrading = false;
+            this._handshakeTimeoutStartMs = null;
+
+            if (this._engineIoOpenMs === null) {
+                const now = Date.now();
+                this._engineIoOpenMs = now;
+                this.logTiming('engineio_open', now);
+            }
+
+            // Join namespace with auth (same as the direct-flow OPEN handler)
+            this.log('Upgrade confirmed, joining namespace...');
+            const connectMsg = '40' + this._namespace + ',' + JSON.stringify(this._auth);
+            this.sendRaw(connectMsg);
+        }
+        else if (message === '6') {
+            // Engine.IO NOOP — server closes the polling transport during upgrade.
+            this.log('Received NOOP (polling transport closed)');
+        }
+        else if (message.startsWith('0')) {
+            if (this._isUpgrading) {
+                // During upgrade, SID was already obtained via polling — ignore duplicate OPEN
+                this.log('Ignoring OPEN packet during upgrade (SID already obtained via polling)');
+                return;
+            }
+            // Engine.IO open — used in direct WebSocket flow (fallback)
             this._handshakeTimeoutStartMs = null;
             if (this._engineIoOpenMs === null) {
                 const now = Date.now();
                 this._engineIoOpenMs = now;
                 this.logTiming('engineio_open', now);
             }
-            this.log('Engine.IO connected, joining namespace (deferred auth)...');
-            // Send namespace connect without auth — server accepts immediately,
-            // then we send auth as a separate event to avoid blocking the handshake.
-            const connectMsg = '40' + this._namespace;
+            this.log('Engine.IO connected, joining namespace with auth...');
+            const connectMsg = '40' + this._namespace + ',' + JSON.stringify(this._auth);
             this.sendRaw(connectMsg);
         }
         else if (message.startsWith('2')) {
@@ -714,16 +858,13 @@ export class EstuaryClient extends EventEmitter<any> {
             this.sendRaw('3');
         }
         else if (message.startsWith('40' + this._namespace) || message.startsWith('40,')) {
-            // Socket.IO namespace connected
+            // Socket.IO namespace connected — auth was already sent during connect
             if (this._namespaceConnectedMs === null) {
                 const now = Date.now();
                 this._namespaceConnectedMs = now;
                 this.logTiming('namespace_connected', now);
             }
-            this.log('Namespace connected, sending deferred authenticate...');
-            // Send auth as a separate event — the server's on_sdk_authenticate handler
-            // processes this and sends session_info back.
-            this.emitSocketEvent('authenticate', this._auth);
+            this.log('Namespace connected (auth sent during connect)');
         }
         else if (message.startsWith('44')) {
             // Socket.IO connect error
@@ -797,6 +938,15 @@ export class EstuaryClient extends EventEmitter<any> {
                 break;
             case 'camera_capture':
                 this.handleCameraCaptureRequest(data);
+                break;
+            case 'voice_started':
+                this.handleVoiceStarted(data);
+                break;
+            case 'voice_error':
+                this.handleVoiceError(data);
+                break;
+            case 'voice_stopped':
+                this.handleVoiceStopped(data);
                 break;
             default:
                 this.log(`Unhandled event: ${eventName}`);
@@ -887,11 +1037,33 @@ export class EstuaryClient extends EventEmitter<any> {
         try {
             const requestId = data?.request_id || '';
             const text = data?.text;
-            this.log(`Camera capture request: ${requestId}${text ? `, context: ${text}` : ''}`);
+            print('');
+            print('📷 ========================================');
+            print('📷 CAMERA CAPTURE REQUEST FROM SERVER');
+            print(`📷 Request ID: ${requestId}`);
+            print(`📷 Context: ${text || '(none)'}`);
+            print('📷 ========================================');
+            print('');
             this.emit('cameraCaptureRequest', { request_id: requestId, text });
         } catch (e) {
             this.logError(`Failed to handle camera_capture_request: ${e}`);
         }
+    }
+
+    private handleVoiceStarted(data: any): void {
+        this.log('Server confirmed voice mode started');
+        this.emit('voiceStarted', data);
+    }
+
+    private handleVoiceError(data: any): void {
+        const errorMsg = data?.message || data?.error || 'Voice error';
+        this.logError(`Voice error: ${errorMsg}`);
+        this.emit('voiceError', data);
+    }
+
+    private handleVoiceStopped(data: any): void {
+        this.log('Server confirmed voice mode stopped');
+        this.emit('voiceStopped', data);
     }
 
     private handleReconnect(): void {
@@ -1074,8 +1246,4 @@ export class EstuaryClient extends EventEmitter<any> {
         print(`[EstuaryClient] ERROR: ${message}`);
     }
 }
-
-
-
-
 

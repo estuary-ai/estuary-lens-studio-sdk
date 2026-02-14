@@ -82,6 +82,17 @@ WebSocket connections do not work in Lens Studio's Preview mode. All network tes
 - Uses Lens Studio's `AudioTrackAsset` for both input and output
 - Audio chunks are base64-encoded for WebSocket transport
 
+### WebSocket onmessage Bug on Spectacles (Polling-First Connection)
+Spectacles' WebSocket implementation has a bug where **unsolicited server→client frames are silently dropped** until the client sends a message first. This means the standard Socket.IO direct-WebSocket handshake fails: the server sends an OPEN packet, but the client never receives it.
+
+**Fix:** `EstuaryClient` uses a polling-first connection strategy:
+1. HTTP GET to `/socket.io/?EIO=4&transport=polling` fetches the Engine.IO OPEN packet (session ID + upgrades list)
+2. WebSocket opens with `?sid=<session_id>&transport=websocket`
+3. Client immediately sends `2probe` — this "primes" the Spectacles frame parser
+4. Server responds `3probe`, client sends `5` (UPGRADE), then joins the `/sdk` namespace
+
+A direct-WebSocket fallback exists for non-Spectacles environments. This quirk was discovered on Spectacles hardware — it cannot be reproduced in Lens Studio Preview (which doesn't support WebSocket at all).
+
 ### Vision
 - Camera capture is on-demand via `camera_image` event
 - `VisionIntentDetector` auto-detects phrases like "what do you see?" and triggers capture

@@ -82,6 +82,9 @@ export class EstuaryCharacter
     /** The message ID that was interrupted (for filtering late-arriving audio) */
     private _interruptedMessageId: string = '';
 
+    /** Counter for streamed audio chunks (diagnostic) */
+    private _audioStreamCount: number = 0;
+
     // ==================== References ====================
 
     /** Microphone for voice input */
@@ -177,7 +180,7 @@ export class EstuaryCharacter
      */
     connect(): void {
         if (!this._characterId) {
-            this.logError('Cannot connect: CharacterId is not set');
+            print(`[EstuaryCharacter] Cannot connect: CharacterId is not set`);
             return;
         }
 
@@ -203,12 +206,12 @@ export class EstuaryCharacter
      */
     sendText(message: string): void {
         if (!this._isConnected) {
-            this.logError('Cannot send text: not connected');
+            print(`[EstuaryCharacter] Cannot send text: not connected`);
             return;
         }
 
         if (!message || message.trim().length === 0) {
-            this.logError('Cannot send empty message');
+            print(`[EstuaryCharacter] Cannot send empty message`);
             return;
         }
 
@@ -224,19 +227,23 @@ export class EstuaryCharacter
      */
     startVoiceSession(): void {
         if (!this._isConnected) {
-            this.logError('Cannot start voice session: not connected');
+            print(`[EstuaryCharacter] Cannot start voice session: not connected`);
             return;
         }
 
         this._isVoiceSessionActive = true;
         this._voiceSessionWarningLogged = false;
+        this._audioStreamCount = 0;
         this._currentPartialResponse = '';
         this._currentMessageId = '';
 
         // Tell server to start voice mode (enables Deepgram STT)
         EstuaryManager.instance.startVoiceMode();
 
-        this.log(`Voice session started for ${this._characterId}`);
+        print(`[EstuaryCharacter] Voice session started for ${this._characterId}, microphone=${!!this._microphone}`);
+        if (!this._microphone) {
+            print(`[EstuaryCharacter] WARNING: No microphone set — call character.microphone = mic before startVoiceSession()`);
+        }
 
         // Start microphone if available
         if (this._microphone) {
@@ -253,7 +260,7 @@ export class EstuaryCharacter
         // Tell server to stop voice mode (saves STT costs)
         EstuaryManager.instance.stopVoiceMode();
 
-        this.log(`Voice session ended for ${this._characterId}`);
+        print(`[EstuaryCharacter] Voice session ended for ${this._characterId}`);
 
         // Stop microphone if available
         if (this._microphone) {
@@ -269,13 +276,18 @@ export class EstuaryCharacter
         if (!this._isConnected) {
             return;
         }
-        
+
         if (!this._isVoiceSessionActive) {
             if (!this._voiceSessionWarningLogged) {
-                this.logError('Audio dropped: voice session not active. Call startVoiceSession() first.');
+                print('[EstuaryCharacter] ⚠️ Audio dropped: voice session not active! Call startVoiceSession() first.');
                 this._voiceSessionWarningLogged = true;
             }
             return;
+        }
+
+        this._audioStreamCount++;
+        if (this._audioStreamCount === 1) {
+            print(`[EstuaryCharacter] DIAG: First audio streamed to server (base64 length=${audioBase64.length})`);
         }
 
         EstuaryManager.instance.streamAudio(audioBase64);
@@ -310,7 +322,7 @@ export class EstuaryCharacter
         this._isConnected = true;
         this._currentSession = sessionInfo;
 
-        this.log(`Connected: ${JSON.stringify(sessionInfo)}`);
+        print(`[EstuaryCharacter] Connected: ${JSON.stringify(sessionInfo)}`);
 
         this.emit('connected', sessionInfo);
     }
@@ -320,13 +332,13 @@ export class EstuaryCharacter
         this._currentSession = null;
         this._isVoiceSessionActive = false;
 
-        this.log(`Disconnected: ${reason}`);
+        print(`[EstuaryCharacter] Disconnected: ${reason}`);
 
         this.emit('disconnected');
 
         // Auto-reconnect if enabled
         if (this._autoReconnect && reason !== 'client disconnect') {
-            this.log('Auto-reconnecting...');
+            print(`[EstuaryCharacter] Auto-reconnecting...`);
             this.connect();
         }
     }
@@ -387,7 +399,7 @@ export class EstuaryCharacter
     }
 
     handleError(error: string): void {
-        this.logError(error);
+        print(`[EstuaryCharacter] Error: ${error}`);
         this.emit('error', error);
     }
 
@@ -396,7 +408,13 @@ export class EstuaryCharacter
     }
 
     handleCameraCaptureRequest(request: CameraCaptureRequest): void {
-        this.log(`Camera capture requested: ${request.request_id}`);
+        print('');
+        print('📷 ========================================');
+        print('📷 CAMERA CAPTURE REQUESTED!');
+        print(`📷 Subscribe to 'cameraCaptureRequest' event to handle this.`);
+        print(`📷 Then call sendCameraImage() with the captured image.`);
+        print('📷 ========================================');
+        print('');
         this.emit('cameraCaptureRequest', request);
     }
 
@@ -406,18 +424,6 @@ export class EstuaryCharacter
         const timestamp = Date.now().toString(36);
         const random = Math.random().toString(36).substring(2, 10);
         return `player_${timestamp}_${random}`;
-    }
-
-    // ==================== Logging ====================
-
-    private log(message: string): void {
-        if (EstuaryManager.hasInstance && EstuaryManager.instance.debugLogging) {
-            print(`[EstuaryCharacter] ${message}`);
-        }
-    }
-
-    private logError(message: string): void {
-        print(`[EstuaryCharacter] ERROR: ${message}`);
     }
 }
 
