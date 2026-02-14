@@ -252,11 +252,21 @@ export class EstuaryMicrophone
      * Handle audio frame from MicrophoneRecorder event.
      */
     private handleAudioFrame(audioFrame: Float32Array): void {
+        // Log first frame unconditionally for diagnostics (even if not recording)
+        if (this._frameCount === 0 && !this._isRecording) {
+            print(`[EstuaryMicrophone] DIAG: onAudioFrame fired but _isRecording=false, frame exists=${!!audioFrame}, length=${audioFrame?.length || 0}`);
+        }
+
         if (!this._isRecording) {
             return;
         }
-        
+
         this._frameCount++;
+
+        // One-time diagnostic log on first frame while recording
+        if (this._frameCount === 1) {
+            print(`[EstuaryMicrophone] DIAG: First audio frame while recording — length=${audioFrame?.length || 0}, isRecording=${this._isRecording}`);
+        }
         
         if (audioFrame && audioFrame.length > 0) {
             this._framesWithAudio++;
@@ -277,8 +287,8 @@ export class EstuaryMicrophone
      */
     private sendAudioToBackend(samples: Float32Array): void {
         if (!this._targetCharacter || !this._targetCharacter.isConnected) {
-            if (this._debugLogging && this._chunksSent === 0) {
-                print(`[EstuaryMicrophone] Not connected, skipping audio chunk`);
+            if (this._chunksSent === 0) {
+                print(`[EstuaryMicrophone] DIAG: Audio not sent — targetCharacter=${!!this._targetCharacter}, isConnected=${this._targetCharacter?.isConnected}`);
             }
             return;
         }

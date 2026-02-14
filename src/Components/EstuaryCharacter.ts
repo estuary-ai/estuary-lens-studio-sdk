@@ -82,6 +82,9 @@ export class EstuaryCharacter
     /** The message ID that was interrupted (for filtering late-arriving audio) */
     private _interruptedMessageId: string = '';
 
+    /** Counter for streamed audio chunks (diagnostic) */
+    private _audioStreamCount: number = 0;
+
     // ==================== References ====================
 
     /** Microphone for voice input */
@@ -230,13 +233,17 @@ export class EstuaryCharacter
 
         this._isVoiceSessionActive = true;
         this._voiceSessionWarningLogged = false;
+        this._audioStreamCount = 0;
         this._currentPartialResponse = '';
         this._currentMessageId = '';
 
         // Tell server to start voice mode (enables Deepgram STT)
         EstuaryManager.instance.startVoiceMode();
 
-        print(`[EstuaryCharacter] Voice session started for ${this._characterId}`);
+        print(`[EstuaryCharacter] Voice session started for ${this._characterId}, microphone=${!!this._microphone}`);
+        if (!this._microphone) {
+            print(`[EstuaryCharacter] WARNING: No microphone set — call character.microphone = mic before startVoiceSession()`);
+        }
 
         // Start microphone if available
         if (this._microphone) {
@@ -269,13 +276,18 @@ export class EstuaryCharacter
         if (!this._isConnected) {
             return;
         }
-        
+
         if (!this._isVoiceSessionActive) {
             if (!this._voiceSessionWarningLogged) {
                 print('[EstuaryCharacter] ⚠️ Audio dropped: voice session not active! Call startVoiceSession() first.');
                 this._voiceSessionWarningLogged = true;
             }
             return;
+        }
+
+        this._audioStreamCount++;
+        if (this._audioStreamCount === 1) {
+            print(`[EstuaryCharacter] DIAG: First audio streamed to server (base64 length=${audioBase64.length})`);
         }
 
         EstuaryManager.instance.streamAudio(audioBase64);

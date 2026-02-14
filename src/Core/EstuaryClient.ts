@@ -939,6 +939,15 @@ export class EstuaryClient extends EventEmitter<any> {
             case 'camera_capture':
                 this.handleCameraCaptureRequest(data);
                 break;
+            case 'voice_started':
+                this.handleVoiceStarted(data);
+                break;
+            case 'voice_error':
+                this.handleVoiceError(data);
+                break;
+            case 'voice_stopped':
+                this.handleVoiceStopped(data);
+                break;
             default:
                 this.log(`Unhandled event: ${eventName}`);
         }
@@ -1039,6 +1048,22 @@ export class EstuaryClient extends EventEmitter<any> {
         } catch (e) {
             this.logError(`Failed to handle camera_capture_request: ${e}`);
         }
+    }
+
+    private handleVoiceStarted(data: any): void {
+        this.log('Server confirmed voice mode started');
+        this.emit('voiceStarted', data);
+    }
+
+    private handleVoiceError(data: any): void {
+        const errorMsg = data?.message || data?.error || 'Voice error';
+        this.logError(`Voice error: ${errorMsg}`);
+        this.emit('voiceError', data);
+    }
+
+    private handleVoiceStopped(data: any): void {
+        this.log('Server confirmed voice mode stopped');
+        this.emit('voiceStopped', data);
     }
 
     private handleReconnect(): void {
