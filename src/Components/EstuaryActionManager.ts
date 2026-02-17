@@ -901,7 +901,6 @@ export class EstuaryActions {
      */
     static setManager(manager: EstuaryActionManager): void {
         EstuaryActions._manager = manager;
-        print(`[EstuaryActions] Manager set - processing ${EstuaryActions._pendingSubscriptions.length} pending subscription(s)`);
         
         // Process any pending subscriptions
         for (const sub of EstuaryActions._pendingSubscriptions) {
@@ -947,7 +946,6 @@ export class EstuaryActions {
             unsubscribe: undefined as (() => void) | undefined
         };
         EstuaryActions._pendingSubscriptions.push(sub);
-        print(`[EstuaryActions] Queued subscription for action '${actionName}' (manager not ready)`);
         
         return () => {
             if (sub.unsubscribe) {
@@ -985,7 +983,6 @@ export class EstuaryActions {
             unsubscribe: undefined as (() => void) | undefined
         };
         EstuaryActions._pendingSubscriptions.push(sub);
-        print("[EstuaryActions] Queued subscription for all actions (manager not ready)");
         
         return () => {
             if (sub.unsubscribe) {

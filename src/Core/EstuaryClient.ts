@@ -81,14 +81,6 @@ interface AuthenticateData {
 }
 
 /**
- * Preferences that can be updated at any time during the session.
- */
-export interface ClientPreferences {
-    /** When true, backend will generate a voice acknowledgment before camera capture */
-    enableVisionAcknowledgment?: boolean;
-}
-
-/**
  * Text message payload.
  */
 interface TextPayload {
@@ -325,28 +317,6 @@ export class EstuaryClient extends EventEmitter<any> {
     }
 
     /**
-     * Signal to the server that a camera image is about to be sent.
-     * This allows the server to send a vision acknowledgment and wait for the image
-     * instead of generating a "I can't see" response.
-     * 
-     * @param text The transcript that triggered vision detection
-     * @param requestId Optional request ID for correlation
-     */
-    sendVisionPending(text: string, requestId?: string): void {
-        if (!this.isConnected) {
-            this.logError('Cannot send vision pending: not connected');
-            return;
-        }
-
-        const payload = {
-            text: text,
-            request_id: requestId || `vision-pending-${Date.now()}`
-        };
-        this.emitSocketEvent('vision_pending', payload);
-        this.log(`Sent vision_pending signal for: ${text.substring(0, 50)}...`);
-    }
-
-    /**
      * Start voice mode on the server (enables Deepgram STT).
      * Must be called before streaming audio for speech-to-text.
      */
@@ -372,21 +342,6 @@ export class EstuaryClient extends EventEmitter<any> {
 
         this.emitSocketEvent('stop_voice', null);
         this.log('Requested server to stop voice mode');
-    }
-
-    /**
-     * Update session preferences on the server.
-     * Can be called at any time while connected to update settings like vision acknowledgment.
-     * @param preferences - The preferences to update
-     */
-    updatePreferences(preferences: ClientPreferences): void {
-        if (!this.isConnected) {
-            this.logError('Cannot update preferences: not connected');
-            return;
-        }
-
-        this.emitSocketEvent('update_preferences', preferences);
-        this.log(`Updated preferences: ${JSON.stringify(preferences)}`);
     }
 
     /**

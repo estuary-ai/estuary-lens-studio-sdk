@@ -19,9 +19,15 @@
  *    - Connect the SceneObject to dynamicAudioOutputObject input
  * 6. Set the serverUrl and characterId in the Inspector
  * 7. Make sure your character has a Voice Preset configured in the dashboard!
+ * 8. Add the CameraCapture component to enable vision (responds to server-initiated requests)
  * 
  * IMPORTANT: Your character must have a voice configured in the Estuary dashboard,
  * otherwise responses will be text-only (no TTS audio).
+ * 
+ * Vision: When the user says something visual (e.g. "what do you think of this vase?"),
+ * the backend's agentic tool router detects the intent and sends a camera_capture request
+ * to the SDK. The CameraCapture component handles capturing and sending the image back.
+ * No client-side vision intent detection is needed.
  */
 
 import { EstuaryCharacter } from '../src/Components/EstuaryCharacter';
@@ -29,7 +35,6 @@ import { EstuaryMicrophone, MicrophoneRecorder } from '../src/Components/Estuary
 import { EstuaryCredentials, IEstuaryCredentials, getCredentialsFromSceneObject } from '../src/Components/EstuaryCredentials';
 import { EstuaryActionManager, EstuaryActions } from '../src/Components/EstuaryActionManager';
 import { EstuaryManager } from '../src/Components/EstuaryManager';
-import { VisionIntentDetector } from '../src/Components/VisionIntentDetector';
 import { EstuaryConfig } from '../src/Core/EstuaryConfig';
 import { setInternetModule } from '../src/Core/EstuaryClient';
 import { SessionInfo } from '../src/Models/SessionInfo';
@@ -96,26 +101,6 @@ export class SimpleAutoConnect extends BaseScriptComponent {
     @hint("Connect the InternetModule from your scene")
     internetModule: InternetModule;
     
-    // ==================== Vision Intent Detection (Natural Language Camera) ====================
-    
-    /**
-     * Enable vision intent detection for natural language camera activation.
-     * When enabled, phrases like "what do you think of this vase?" will trigger camera capture.
-     * Uses smart heuristic detection - no additional API key needed!
-     */
-    @input
-    @hint("Enable natural language camera activation (e.g., 'what do you think of this vase?')")
-    enableVisionIntentDetection: boolean = true;
-    
-    /**
-     * Confidence threshold for triggering camera capture (0-1).
-     * Lower = more triggers, Higher = more selective.
-     * Default 0.7 balances sensitivity with avoiding false triggers.
-     */
-    @input
-    @hint("Confidence threshold for camera trigger (0.0-1.0)")
-    visionConfidenceThreshold: number = 0.7;
-    
     /** 
      * Default sample rate for audio playback.
      * 16000Hz is optimized for Snap Spectacles hardware.
@@ -129,7 +114,6 @@ export class SimpleAutoConnect extends BaseScriptComponent {
     private character: EstuaryCharacter | null = null;
     private microphone: EstuaryMicrophone | null = null;
     private actionManager: EstuaryActionManager | null = null;
-    private visionIntentDetector: VisionIntentDetector | null = null;
     private dynamicAudioOutput: DynamicAudioOutput | null = null;
     private playerId: string = "";
     private updateEvent: SceneEvent | null = null;
@@ -188,10 +172,8 @@ export class SimpleAutoConnect extends BaseScriptComponent {
         this.updateEvent = this.createEvent("UpdateEvent");
         this.updateEvent.bind(() => this.onUpdate());
         
-        // Auto-connect after a brief delay
-        const delayedEvent = this.createEvent("DelayedCallbackEvent");
-        delayedEvent.bind(() => this.connect());
-        (delayedEvent as any).reset(0.5);
+        // Connect immediately — credentials and modules are already resolved
+        this.connect();
     }
     
     /**
@@ -248,103 +230,12 @@ export class SimpleAutoConnect extends BaseScriptComponent {
         
         this.log("Action manager configured - EstuaryActions global events ready");
         
-        // Set up vision intent detector for natural language camera activation
-        if (this.enableVisionIntentDetection) {
-            this.visionIntentDetector = new VisionIntentDetector({
-                apiKey: '', // Uses heuristic detection - no external API needed
-                confidenceThreshold: this.visionConfidenceThreshold,
-                debugLogging: this.credentials!.debugMode
-            });
-            
-            // Connect to character to listen for transcripts
-            this.visionIntentDetector.startListening(this.character);
-            
-            this.log("Vision intent detection enabled");
-            this.log("Natural language phrases like 'what do you think of this vase?' will now trigger camera");
-        }
-        
-        // Set up DynamicAudioOutput for voice responses (Snap's recommended approach)
-        if (this.dynamicAudioOutputObject) {
-            // Find DynamicAudioOutput component on the SceneObject
-            const componentCount = this.dynamicAudioOutputObject.getComponentCount("Component.ScriptComponent");
-            for (let i = 0; i < componentCount; i++) {
-                const scriptComp = this.dynamicAudioOutputObject.getComponentByIndex("Component.ScriptComponent", i) as any;
-                if (scriptComp && typeof scriptComp.initialize === 'function' && typeof scriptComp.addAudioFrame === 'function') {
-                    this.dynamicAudioOutput = scriptComp as DynamicAudioOutput;
-                    break;
-                }
-            }
-            
-            if (this.dynamicAudioOutput) {
-                // Initialize with sample rate - this starts the AudioComponent
-                this.dynamicAudioOutput.initialize(this.audioSampleRate);
-                this.audioInitialized = true;
-                print(`[SimpleAutoConnect] ✅ DynamicAudioOutput configured (${this.audioSampleRate}Hz)`);
-            } else {
-                print("[SimpleAutoConnect] ⚠️ WARNING: Could not find DynamicAudioOutput script on object");
-                print("[SimpleAutoConnect] Make sure the DynamicAudioOutput script is attached");
-            }
-        } else {
-            print("[SimpleAutoConnect] ⚠️ WARNING: No dynamicAudioOutputObject configured - voice responses won't be played");
-            print("[SimpleAutoConnect] Add DynamicAudioOutput script to a SceneObject and connect it");
-        }
-        
-        // Create microphone (VAD is handled by Deepgram backend)
+        // Create microphone (VAD is handled by Deepgram backend).
+        // NOTE: Hardware component discovery (MicrophoneRecorder, DynamicAudioOutput)
+        // is deferred to the 'connected' callback so that package scripts from
+        // RemoteServiceGateway.lspkg have time to initialize their APIs.
         this.microphone = new EstuaryMicrophone(this.character);
         this.microphone.debugLogging = this.credentials!.debugMode;
-        
-        // Set up microphone - prefer MicrophoneRecorder (event-based, recommended)
-        if (this.microphoneRecorderObject) {
-            print("[SimpleAutoConnect] microphoneRecorderObject input detected, searching for MicrophoneRecorder...");
-            
-            const sceneObj = this.microphoneRecorderObject;
-            let micRecorder: MicrophoneRecorder | null = null;
-            
-            // Get all script components on the SceneObject
-            const componentCount = sceneObj.getComponentCount("Component.ScriptComponent");
-            print(`[SimpleAutoConnect] Found ${componentCount} ScriptComponent(s) on object`);
-            
-            for (let i = 0; i < componentCount; i++) {
-                const scriptComp = sceneObj.getComponentByIndex("Component.ScriptComponent", i) as any;
-                if (scriptComp) {
-                    // Log what we find
-                    print(`[SimpleAutoConnect] Script ${i}: checking for MicrophoneRecorder API...`);
-                    
-                    // Check if this script has onAudioFrame (MicrophoneRecorder signature)
-                    if (scriptComp.onAudioFrame && typeof scriptComp.startRecording === 'function') {
-                        print("[SimpleAutoConnect] ✅ Found MicrophoneRecorder directly on script component");
-                        micRecorder = scriptComp as MicrophoneRecorder;
-                        break;
-                    }
-                    
-                    // Check .api property
-                    if (scriptComp.api && scriptComp.api.onAudioFrame) {
-                        print("[SimpleAutoConnect] ✅ Found MicrophoneRecorder via .api property");
-                        micRecorder = scriptComp.api as MicrophoneRecorder;
-                        break;
-                    }
-                    
-                    // Log available properties for debugging
-                    const props: string[] = [];
-                    for (const key in scriptComp) {
-                        props.push(key);
-                    }
-                    print(`[SimpleAutoConnect] Script ${i} properties: ${props.slice(0, 10).join(', ')}${props.length > 10 ? '...' : ''}`);
-                }
-            }
-            
-            if (micRecorder) {
-                this.microphone.setMicrophoneRecorder(micRecorder);
-                this.character.microphone = this.microphone;
-                print("[SimpleAutoConnect] ✅ MicrophoneRecorder configured successfully");
-            } else {
-                print("[SimpleAutoConnect] ❌ ERROR: Could not find MicrophoneRecorder API on any script component");
-                print("[SimpleAutoConnect] Make sure the MicrophoneRecorder script is attached to this object");
-            }
-        } else {
-            print("[SimpleAutoConnect] ❌ ERROR: No microphoneRecorderObject configured!");
-            print("[SimpleAutoConnect] Add MicrophoneRecorder from RemoteServiceGateway.lspkg to your scene");
-        }
         
         // Set up event handlers
         this.setupEventHandlers();
@@ -371,10 +262,6 @@ export class SimpleAutoConnect extends BaseScriptComponent {
             this.actionManager.dispose();
             this.actionManager = null;
         }
-        if (this.visionIntentDetector) {
-            this.visionIntentDetector.dispose();
-            this.visionIntentDetector = null;
-        }
         if (this.dynamicAudioOutput) {
             this.dynamicAudioOutput.interruptAudioOutput();
             this.dynamicAudioOutput = null;
@@ -390,17 +277,18 @@ export class SimpleAutoConnect extends BaseScriptComponent {
     private setupEventHandlers(): void {
         if (!this.character) return;
         
-        // Connected - start streaming mic immediately
+        // Connected - discover hardware components, then start voice + mic
         this.character.on('connected', (session: SessionInfo) => {
-            print("===========================================");
-            print("  Connected! Starting mic stream...");
-            print(`  Session: ${session.sessionId}`);
-            print("===========================================");
+            this.log(`Connected! Session: ${session.sessionId}`);
             
             // Initialize activity tracking
             this.recordActivity();
             this.lastTickTime = Date.now();
             this.disconnectedDueToInactivity = false;
+            
+            // Discover hardware components now — by the time the WebSocket
+            // handshake completes, all package scripts will have initialised.
+            this.discoverHardwareComponents();
             
             // Start voice session FIRST - this enables audio streaming
             this.character!.startVoiceSession();
@@ -471,6 +359,113 @@ export class SimpleAutoConnect extends BaseScriptComponent {
         });
     }
     
+    // ==================== Hardware Component Discovery ====================
+    
+    /**
+     * Discover DynamicAudioOutput and MicrophoneRecorder on the referenced
+     * SceneObjects.  This is called from the 'connected' callback instead of
+     * from connect() so that package scripts from RemoteServiceGateway.lspkg
+     * have had time to run their onAwake() and expose their APIs.
+     */
+    private discoverHardwareComponents(): void {
+        // Skip if already discovered (e.g. on reconnect)
+        if (!this.dynamicAudioOutput) {
+            this.discoverDynamicAudioOutput();
+        }
+        if (this.microphone && !this.microphone.isRecording) {
+            this.discoverMicrophoneRecorder();
+        }
+    }
+    
+    /**
+     * Find the DynamicAudioOutput script on the configured SceneObject.
+     */
+    private discoverDynamicAudioOutput(): void {
+        if (!this.dynamicAudioOutputObject) {
+            print("[SimpleAutoConnect] WARNING: No dynamicAudioOutputObject configured - voice responses won't be played");
+            return;
+        }
+        
+        const scripts = this.dynamicAudioOutputObject.getComponents("Component.ScriptComponent") as any[];
+        for (let i = 0; i < scripts.length; i++) {
+            const sc = scripts[i] as any;
+            if (sc && typeof sc.initialize === 'function' && typeof sc.addAudioFrame === 'function') {
+                this.dynamicAudioOutput = sc as DynamicAudioOutput;
+                break;
+            }
+        }
+        
+        if (this.dynamicAudioOutput) {
+            this.dynamicAudioOutput.initialize(this.audioSampleRate);
+            this.audioInitialized = true;
+            this.log(`DynamicAudioOutput configured (${this.audioSampleRate}Hz)`);
+        } else {
+            print("[SimpleAutoConnect] WARNING: Could not find DynamicAudioOutput script on object");
+        }
+    }
+    
+    /**
+     * Find the MicrophoneRecorder script on the configured SceneObject.
+     */
+    private discoverMicrophoneRecorder(): void {
+        if (!this.microphoneRecorderObject) {
+            print("[SimpleAutoConnect] ERROR: No microphoneRecorderObject configured!");
+            return;
+        }
+        
+        this.log('Searching for MicrophoneRecorder...');
+        
+        const sceneObj = this.microphoneRecorderObject;
+        let micRecorder: MicrophoneRecorder | null = null;
+        
+        const scripts = sceneObj.getComponents("Component.ScriptComponent") as any[];
+        this.log(`Found ${scripts.length} ScriptComponent(s) on object`);
+        
+        for (let i = 0; i < scripts.length; i++) {
+            const scriptComp = scripts[i] as any;
+            if (!scriptComp) continue;
+            
+            // Check if this script has onAudioFrame (MicrophoneRecorder signature)
+            if (scriptComp.onAudioFrame && typeof scriptComp.startRecording === 'function') {
+                this.log('Found MicrophoneRecorder directly on script component');
+                micRecorder = scriptComp as MicrophoneRecorder;
+                break;
+            }
+            
+            // Check .api property (deprecated but may still work)
+            if (scriptComp.api && scriptComp.api.onAudioFrame) {
+                this.log('Found MicrophoneRecorder via .api property');
+                micRecorder = scriptComp.api as MicrophoneRecorder;
+                break;
+            }
+            
+            // Log ALL available properties on detection failure for debugging
+            if (this.credentials?.debugMode) {
+                const props: string[] = [];
+                for (const key in scriptComp) {
+                    props.push(key);
+                }
+                this.log(`Script ${i} properties (${props.length}): ${props.join(', ')}`);
+                // Also log .api sub-properties if present
+                if (scriptComp.api) {
+                    const apiProps: string[] = [];
+                    for (const key in scriptComp.api) {
+                        apiProps.push(key);
+                    }
+                    this.log(`Script ${i} .api properties (${apiProps.length}): ${apiProps.join(', ')}`);
+                }
+            }
+        }
+        
+        if (micRecorder) {
+            this.microphone!.setMicrophoneRecorder(micRecorder);
+            this.character!.microphone = this.microphone;
+            this.log('MicrophoneRecorder configured successfully');
+        } else {
+            print("[SimpleAutoConnect] ERROR: Could not find MicrophoneRecorder API on any script component");
+        }
+    }
+    
     private startMicStream(): void {
         if (this.microphone) {
             this.microphone.startRecording();
@@ -534,20 +529,10 @@ export class SimpleAutoConnect extends BaseScriptComponent {
     }
     
     /**
-     * Display a very obvious disconnect log.
+     * Log a disconnect event.
      */
     private logDisconnect(reason: string): void {
-        print("");
-        print("╔══════════════════════════════════════════════════════════════════╗");
-        print("║                                                                  ║");
-        print("║   ⚠️  ESTUARY SDK DISCONNECTED  ⚠️                                ║");
-        print("║                                                                  ║");
-        print("╠══════════════════════════════════════════════════════════════════╣");
-        print(`║   Reason: ${reason.padEnd(54)}║`);
-        print(`║   Time: ${new Date().toISOString().padEnd(56)}║`);
-        print("║                                                                  ║");
-        print("╚══════════════════════════════════════════════════════════════════╝");
-        print("");
+        print(`[SimpleAutoConnect] Disconnected: ${reason}`);
     }
     
     // ==================== Public Methods ====================
@@ -570,12 +555,34 @@ export class SimpleAutoConnect extends BaseScriptComponent {
     getCharacter(): EstuaryCharacter | null {
         return this.character;
     }
-    
-    /** Get the vision intent detector for natural language camera activation */
-    getVisionIntentDetector(): VisionIntentDetector | null {
-        return this.visionIntentDetector;
+
+
+    /** Whether the microphone is currently muted (not recording) */
+    get isMuted(): boolean {
+        return this.microphone ? !this.microphone.isRecording : true;
     }
-    
+
+    /** Toggle mute state. Returns true if now muted, false if now unmuted. */
+    toggleMute(): boolean {
+        if (this.microphone) {
+            this.microphone.toggleRecording();
+            const muted = !this.microphone.isRecording;
+            print(`[SimpleAutoConnect] Mic ${muted ? 'MUTED' : 'UNMUTED'}`);
+            return muted;
+        }
+        return true;
+    }
+
+    /** Set mute state explicitly */
+    setMuted(muted: boolean): void {
+        if (!this.microphone) return;
+        if (muted && this.microphone.isRecording) {
+            this.microphone.stopRecording();
+        } else if (!muted && !this.microphone.isRecording) {
+            this.microphone.startRecording();
+        }
+    }
+
     // ==================== Utility ====================
     
     private log(message: string): void {
