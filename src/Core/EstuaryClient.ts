@@ -141,8 +141,8 @@ export class EstuaryClient extends EventEmitter<any> {
     private _sendQueue: string[] = [];
     private _isSending: boolean = false;
     private _lastSendTime: number = 0;
-    private _minSendGapMs: number = 100; // Minimum 100ms gap - Lens Studio WebSocket needs time to flush
-    private _maxQueueSize: number = 5; // Drop old audio if queue gets too long
+    private _minSendGapMs: number = 75; // Minimum 75ms gap - Lens Studio WebSocket needs time to flush
+    private _maxQueueSize: number = 20; // Drop old audio if queue gets too long
 
     /**
      * Create a new EstuaryClient.
@@ -1081,32 +1081,37 @@ export class EstuaryClient extends EventEmitter<any> {
         if (!this._webSocket) {
             return;
         }
-        
-        // Clean the message aggressively to prevent garbage bytes
-        // 1. Remove control characters
-        let cleanMessage = message.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '');
-        
-        // 2. For JSON-containing messages, ensure they end correctly
-        // Socket.IO messages end with } or ] for the JSON payload
-        if (cleanMessage.includes('{') || cleanMessage.includes('[')) {
-            // Find the last valid JSON terminator
-            const lastBrace = cleanMessage.lastIndexOf('}');
-            const lastBracket = cleanMessage.lastIndexOf(']');
-            const lastValid = Math.max(lastBrace, lastBracket);
-            
-            if (lastValid > 0 && lastValid < cleanMessage.length - 1) {
-                // There's garbage after the JSON - truncate it
-                const garbage = cleanMessage.substring(lastValid + 1);
-                this.log('Removing trailing garbage: "' + garbage + '" (' + garbage.length + ' chars)');
-                cleanMessage = cleanMessage.substring(0, lastValid + 1);
+
+        // Audio messages are constructed programmatically — skip expensive cleanup
+        const isAudioMessage = message.includes('stream_audio');
+        let cleanMessage = message;
+
+        if (!isAudioMessage) {
+            // Clean the message aggressively to prevent garbage bytes
+            // 1. Remove control characters
+            cleanMessage = message.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '');
+
+            // 2. For JSON-containing messages, ensure they end correctly
+            // Socket.IO messages end with } or ] for the JSON payload
+            if (cleanMessage.includes('{') || cleanMessage.includes('[')) {
+                // Find the last valid JSON terminator
+                const lastBrace = cleanMessage.lastIndexOf('}');
+                const lastBracket = cleanMessage.lastIndexOf(']');
+                const lastValid = Math.max(lastBrace, lastBracket);
+
+                if (lastValid > 0 && lastValid < cleanMessage.length - 1) {
+                    // There's garbage after the JSON - truncate it
+                    const garbage = cleanMessage.substring(lastValid + 1);
+                    this.log('Removing trailing garbage: "' + garbage + '" (' + garbage.length + ' chars)');
+                    cleanMessage = cleanMessage.substring(0, lastValid + 1);
+                }
             }
         }
-        
+
         // Add to queue, but manage overflow for audio messages
         if (this._sendQueue.length >= this._maxQueueSize) {
             // Queue is full - drop oldest audio messages to make room
             // Keep non-audio messages (they're important for protocol)
-            const isAudioMessage = cleanMessage.includes('stream_audio');
             if (isAudioMessage) {
                 // Find and remove oldest audio message
                 for (let i = 0; i < this._sendQueue.length; i++) {

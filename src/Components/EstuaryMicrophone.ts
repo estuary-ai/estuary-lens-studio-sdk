@@ -79,16 +79,14 @@ export class EstuaryMicrophone
     /** Chunks sent counter */
     private _chunksSent: number = 0;
 
-    // ==================== Throttling ====================
-
-    /** Throttle audio sends to prevent WebSocket overflow */
+    /** Timestamp of last audio send (for diagnostics) */
     private _lastSendTime: number = 0;
-    
-    /** Max 10 sends per second - prevents Lens Studio WebSocket concatenation */
-    private _minSendIntervalMs: number = 100;
-    
-    /** Buffer for accumulating throttled audio */
+
+    /** Buffer for accumulating small audio frames into sendable chunks */
     private _pendingAudioBuffer: Float32Array | null = null;
+
+    /** Minimum samples before sending a chunk (~80ms at 16kHz) */
+    private _minChunkSamples: number = 1280;
 
     // ==================== References ====================
 
@@ -195,7 +193,7 @@ export class EstuaryMicrophone
         this._frameCount = 0;
         this._framesWithAudio = 0;
         this._pendingAudioBuffer = null;
-        
+
         this._microphoneRecorder.startRecording();
         print('[EstuaryMicrophone] ✅ Started recording');
         this.emit('recordingStarted');
@@ -212,7 +210,18 @@ export class EstuaryMicrophone
         if (this._microphoneRecorder) {
             this._microphoneRecorder.stopRecording();
         }
-        
+
+        // Flush any remaining buffered audio so the tail end of speech isn't lost
+        if (this._pendingAudioBuffer && this._pendingAudioBuffer.length > 0 && this._targetCharacter?.isConnected) {
+            const chunk = this._pendingAudioBuffer;
+            this._pendingAudioBuffer = null;
+            const pcmBytes = floatToPCM16(chunk);
+            const base64Audio = Base64.encode(pcmBytes);
+            this._chunksSent++;
+            this._targetCharacter.streamAudio(base64Audio);
+        }
+        this._pendingAudioBuffer = null;
+
         this._isRecording = false;
         
         // Log final stats
@@ -240,9 +249,9 @@ export class EstuaryMicrophone
      */
     dispose(): void {
         this.stopRecording();
+        this._pendingAudioBuffer = null;
         this._microphoneRecorder = null;
         this._targetCharacter = null;
-        this._pendingAudioBuffer = null;
         this.removeAllListeners();
     }
 
@@ -282,7 +291,10 @@ export class EstuaryMicrophone
     }
 
     /**
-     * Send audio to the backend with throttling and Base64 encoding.
+     * Send audio to the backend with Base64 encoding.
+     * Accumulates small frames into chunks of at least _minChunkSamples (~80ms)
+     * before sending, to avoid flooding EstuaryClient's send queue on Spectacles
+     * where MicrophoneRecorder delivers tiny frames (128-288 samples) at ~60fps.
      * Uses native Lens Studio Base64 class for hardware compatibility.
      */
     private sendAudioToBackend(samples: Float32Array): void {
@@ -293,54 +305,43 @@ export class EstuaryMicrophone
             return;
         }
 
-        // Throttle sends to prevent WebSocket buffer overflow
-        const now = Date.now();
-        const timeSinceLastSend = now - this._lastSendTime;
-        
-        if (timeSinceLastSend < this._minSendIntervalMs) {
-            // Too soon - accumulate audio in pending buffer
-            if (!this._pendingAudioBuffer) {
-                this._pendingAudioBuffer = new Float32Array(samples);
-            } else {
-                // Append to pending buffer
-                const combined = new Float32Array(this._pendingAudioBuffer.length + samples.length);
-                combined.set(this._pendingAudioBuffer);
-                combined.set(samples, this._pendingAudioBuffer.length);
-                this._pendingAudioBuffer = combined;
-            }
-            return;
-        }
-        
-        // Include any pending audio
-        let finalAudio = samples;
+        // Accumulate small frames into larger chunks to avoid flooding the send queue
         if (this._pendingAudioBuffer) {
             const combined = new Float32Array(this._pendingAudioBuffer.length + samples.length);
             combined.set(this._pendingAudioBuffer);
             combined.set(samples, this._pendingAudioBuffer.length);
-            finalAudio = combined;
-            this._pendingAudioBuffer = null;
+            this._pendingAudioBuffer = combined;
+        } else {
+            this._pendingAudioBuffer = new Float32Array(samples);
         }
-        
-        // Convert to Base64 PCM16 using native Lens Studio Base64
-        const pcmBytes = floatToPCM16(finalAudio);
+
+        // Wait until we have enough audio for a meaningful chunk
+        if (this._pendingAudioBuffer.length < this._minChunkSamples) {
+            return;
+        }
+
+        // Send the accumulated chunk
+        const chunk = this._pendingAudioBuffer;
+        this._pendingAudioBuffer = null;
+
+        const pcmBytes = floatToPCM16(chunk);
         const base64Audio = Base64.encode(pcmBytes);
-        
+
         this._chunksSent++;
-        this._lastSendTime = now;
-        
+        this._lastSendTime = Date.now();
+
         // Log first chunk to confirm audio is being sent
         if (this._chunksSent === 1) {
-            print(`[EstuaryMicrophone] ✅ First audio chunk sent: ${finalAudio.length} samples @ ${this._sampleRate}Hz, base64 length=${base64Audio.length}`);
+            print(`[EstuaryMicrophone] ✅ First audio chunk sent: ${chunk.length} samples @ ${this._sampleRate}Hz, base64 length=${base64Audio.length}`);
         }
-        
+
         // Log every 20 chunks
         if (this._debugLogging && this._chunksSent % 20 === 0) {
             print(`[EstuaryMicrophone] Stats: sent=${this._chunksSent}, frames=${this._frameCount}`);
         }
 
-        // Send to character
         this._targetCharacter.streamAudio(base64Audio);
-        this.emit('audioChunkSent', finalAudio.length);
+        this.emit('audioChunkSent', chunk.length);
     }
 
     private log(message: string): void {

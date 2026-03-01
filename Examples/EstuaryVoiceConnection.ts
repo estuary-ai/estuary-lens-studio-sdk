@@ -1,5 +1,5 @@
 /**
- * SimpleAutoConnect.ts
+ * EstuaryVoiceConnection.ts
  * 
  * Auto-connects to Estuary and streams microphone audio continuously.
  * VAD is handled by the backend (Deepgram), so we just stream everything.
@@ -53,7 +53,7 @@ interface DynamicAudioOutput {
 }
 
 @component
-export class SimpleAutoConnect extends BaseScriptComponent {
+export class EstuaryVoiceConnection extends BaseScriptComponent {
     
     // ==================== Configuration (set in Inspector) ====================
 
@@ -127,12 +127,6 @@ export class SimpleAutoConnect extends BaseScriptComponent {
     /** Inactivity timeout in ms (10 minutes) */
     private readonly INACTIVITY_TIMEOUT_MS: number = 10 * 60 * 1000;
     
-    /** Last queue tick timestamp */
-    private lastTickTime: number = 0;
-    
-    /** Tick interval in ms (100ms - processes send queue to flush pending pong responses) */
-    private readonly TICK_INTERVAL_MS: number = 100;
-    
     /** Whether we've already disconnected due to inactivity */
     private disconnectedDueToInactivity: boolean = false;
     
@@ -144,8 +138,8 @@ export class SimpleAutoConnect extends BaseScriptComponent {
         // Get credentials from the referenced SceneObject or singleton
         this.credentials = this.getCredentials();
         if (!this.credentials) {
-            print("[SimpleAutoConnect] ERROR: No EstuaryCredentials found!");
-            print("[SimpleAutoConnect] Either set credentialsObject input OR add EstuaryCredentials to your scene");
+            print("[EstuaryVoiceConnection] ERROR: No EstuaryCredentials found!");
+            print("[EstuaryVoiceConnection] Either set credentialsObject input OR add EstuaryCredentials to your scene");
             return;
         }
         
@@ -154,7 +148,7 @@ export class SimpleAutoConnect extends BaseScriptComponent {
             setInternetModule(this.internetModule);
             this.log("InternetModule configured");
         } else {
-            print("[SimpleAutoConnect] ERROR: InternetModule is required! Add it to your scene and connect it.");
+            print("[EstuaryVoiceConnection] ERROR: InternetModule is required! Add it to your scene and connect it.");
             return;
         }
         
@@ -206,12 +200,12 @@ export class SimpleAutoConnect extends BaseScriptComponent {
     
     private connect(): void {
         if (!this.credentials) {
-            print("[SimpleAutoConnect] ERROR: No credentials available!");
+            print("[EstuaryVoiceConnection] ERROR: No credentials available!");
             return;
         }
         
         if (!this.credentials.characterId) {
-            print("[SimpleAutoConnect] ERROR: characterId is required!");
+            print("[EstuaryVoiceConnection] ERROR: characterId is required!");
             return;
         }
         
@@ -283,7 +277,6 @@ export class SimpleAutoConnect extends BaseScriptComponent {
             
             // Initialize activity tracking
             this.recordActivity();
-            this.lastTickTime = Date.now();
             this.disconnectedDueToInactivity = false;
             
             // Discover hardware components now — by the time the WebSocket
@@ -382,7 +375,7 @@ export class SimpleAutoConnect extends BaseScriptComponent {
      */
     private discoverDynamicAudioOutput(): void {
         if (!this.dynamicAudioOutputObject) {
-            print("[SimpleAutoConnect] WARNING: No dynamicAudioOutputObject configured - voice responses won't be played");
+            print("[EstuaryVoiceConnection] WARNING: No dynamicAudioOutputObject configured - voice responses won't be played");
             return;
         }
         
@@ -399,8 +392,15 @@ export class SimpleAutoConnect extends BaseScriptComponent {
             this.dynamicAudioOutput.initialize(this.audioSampleRate);
             this.audioInitialized = true;
             this.log(`DynamicAudioOutput configured (${this.audioSampleRate}Hz)`);
+
+            // Set AudioComponent to Low Latency mode for faster TTS playback on Spectacles
+            const audioComp = this.dynamicAudioOutputObject.getComponent("Component.AudioComponent");
+            if (audioComp) {
+                (audioComp as AudioComponent).playbackMode = Audio.PlaybackMode.LowLatency;
+                this.log("AudioComponent set to Low Latency mode");
+            }
         } else {
-            print("[SimpleAutoConnect] WARNING: Could not find DynamicAudioOutput script on object");
+            print("[EstuaryVoiceConnection] WARNING: Could not find DynamicAudioOutput script on object");
         }
     }
     
@@ -409,7 +409,7 @@ export class SimpleAutoConnect extends BaseScriptComponent {
      */
     private discoverMicrophoneRecorder(): void {
         if (!this.microphoneRecorderObject) {
-            print("[SimpleAutoConnect] ERROR: No microphoneRecorderObject configured!");
+            print("[EstuaryVoiceConnection] ERROR: No microphoneRecorderObject configured!");
             return;
         }
         
@@ -462,7 +462,7 @@ export class SimpleAutoConnect extends BaseScriptComponent {
             this.character!.microphone = this.microphone;
             this.log('MicrophoneRecorder configured successfully');
         } else {
-            print("[SimpleAutoConnect] ERROR: Could not find MicrophoneRecorder API on any script component");
+            print("[EstuaryVoiceConnection] ERROR: Could not find MicrophoneRecorder API on any script component");
         }
     }
     
@@ -490,13 +490,12 @@ export class SimpleAutoConnect extends BaseScriptComponent {
     private checkInactivityAndTick(): void {
         const now = Date.now();
 
-        // ALWAYS process send queue — even during Connecting state.
+        // ALWAYS process send queue every frame — even during Connecting state.
         // Protocol messages (pong "3", auth "40/sdk,...") get stuck in the queue
         // with no tick() to drain them on Spectacles if we only tick when connected.
-        if (now - this.lastTickTime >= this.TICK_INTERVAL_MS) {
-            this.lastTickTime = now;
-            EstuaryManager.instance.tick();
-        }
+        // The 75ms min send gap is enforced inside processSendQueue(), so calling
+        // tick() every frame (~16ms at 60fps) is safe and reduces queue latency.
+        EstuaryManager.instance.tick();
 
         // Inactivity check only applies when connected
         if (!this.character?.isConnected) {
@@ -532,7 +531,7 @@ export class SimpleAutoConnect extends BaseScriptComponent {
      * Log a disconnect event.
      */
     private logDisconnect(reason: string): void {
-        print(`[SimpleAutoConnect] Disconnected: ${reason}`);
+        print(`[EstuaryVoiceConnection] Disconnected: ${reason}`);
     }
     
     // ==================== Public Methods ====================
@@ -567,7 +566,7 @@ export class SimpleAutoConnect extends BaseScriptComponent {
         if (this.microphone) {
             this.microphone.toggleRecording();
             const muted = !this.microphone.isRecording;
-            print(`[SimpleAutoConnect] Mic ${muted ? 'MUTED' : 'UNMUTED'}`);
+            print(`[EstuaryVoiceConnection] Mic ${muted ? 'MUTED' : 'UNMUTED'}`);
             return muted;
         }
         return true;
@@ -587,7 +586,7 @@ export class SimpleAutoConnect extends BaseScriptComponent {
     
     private log(message: string): void {
         if (this.credentials?.debugMode) {
-            print(`[SimpleAutoConnect] ${message}`);
+            print(`[EstuaryVoiceConnection] ${message}`);
         }
     }
 }
