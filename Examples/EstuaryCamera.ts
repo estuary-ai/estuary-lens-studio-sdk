@@ -1,12 +1,19 @@
 /**
  * CameraCapture - Component for handling camera capture requests on Spectacles.
  * 
- * This component responds to camera capture requests from:
- * 1. Server-side detection (explicit commands like "what am I looking at")
- * 2. VisionIntentDetector (natural language like "what do you think of this vase?")
+ * This component responds to server-initiated camera capture requests. When the
+ * backend's agentic tool router determines that the user's speech requires visual
+ * context (e.g., "what do you think of this vase?"), the VisionTool sends a
+ * camera_capture request to the SDK. This component captures the image and sends
+ * it back for VLM analysis.
  * 
- * The component captures an image using the CameraModule API at a configurable resolution,
- * and sends it back for AI vision analysis.
+ * Flow:
+ * 1. User says something visual ("Hey what do you think of this vase?")
+ * 2. Backend LLM invokes VisionTool via function calling
+ * 3. VisionTool sends camera_capture request to SDK (with acknowledgment text)
+ * 4. This component captures image via CameraModule
+ * 5. Image is sent back to server for VLM analysis
+ * 6. Backend streams VLM response back to SDK
  * 
  * Setup in Lens Studio:
  * 1. Create a Scene Object and add this script
@@ -14,22 +21,6 @@
  * 3. Enable "Extended Permissions" in Project Settings for development
  *    (allows both camera access and WebSocket together)
  * 4. Optionally adjust "captureResolution" (default 512px) in the Inspector
- * 5. (Recommended) Add VisionIntentDetectorComponent for natural language camera activation
- * 
- * Usage:
- * - Explicit commands: "What am I looking at?" (server-side detection)
- * - Natural language: "Hey what do you think of this vase I'm looking at?" (requires VisionIntentDetector)
- * 
- * Natural Language Camera Activation (NEW):
- * To enable natural language camera activation, add the VisionIntentDetectorComponent:
- * 1. Create another SceneObject and add VisionIntentDetectorComponent script
- * 2. Set your LLM API key (OpenAI by default)
- * 3. The VisionIntentDetector will analyze speech and trigger camera when appropriate
- * 
- * Vision Acknowledgment:
- * Enable "enableVisionAcknowledgment" to have the character say a quick phrase
- * (e.g., "Let me take a look!") before analyzing the image. This provides
- * immediate feedback while the camera captures and processes the image.
  * 
  * Resolution:
  * - Default is 512px (smaller dimension), which gives good quality while keeping payload small
@@ -65,15 +56,6 @@ export class CameraCapture extends BaseScriptComponent {
     @input
     @hint("Camera capture resolution (smaller dimension in pixels)")
     captureResolution: number = 512;
-    
-    /**
-     * Enable vision acknowledgment.
-     * When true, the character will say a quick phrase (e.g., "Let me take a look!")
-     * before analyzing the captured image. This provides immediate feedback to the user.
-     */
-    @input
-    @hint("Character says acknowledgment before analyzing image")
-    enableVisionAcknowledgment: boolean = true;
     
     // ==================== CameraModule ====================
     
@@ -189,41 +171,14 @@ export class CameraCapture extends BaseScriptComponent {
             return;
         }
         
-        // Subscribe to camera capture requests from the server
+        // Subscribe to camera capture requests from the server (backend VisionTool)
         manager.on('cameraCaptureRequest', (request: CameraCaptureRequest) => {
             this.handleCaptureRequest(request);
         });
         
-        // Send vision acknowledgment preference to backend when connected
-        // If already connected, send immediately; otherwise wait for connection
-        if (manager.isConnected) {
-            this.sendVisionPreference();
-        }
-        manager.on('connectionStateChanged', (state: any) => {
-            if (state === 'connected') {
-                this.sendVisionPreference();
-            }
-        });
-        
         this._isSubscribed = true;
-        this.log('Subscribed to camera capture requests');
-        this.log(`Vision acknowledgment: ${this.enableVisionAcknowledgment ? 'enabled' : 'disabled'}`);
-        this.log('Camera capture can be triggered by:');
-        this.log('  1. Explicit commands: "What am I looking at?"');
-        this.log('  2. Natural language (with VisionIntentDetector): "What do you think of this vase?"');
-    }
-    
-    /**
-     * Send the vision acknowledgment preference to the backend.
-     */
-    private sendVisionPreference(): void {
-        const manager = EstuaryManager.instance;
-        if (!manager || !manager.isConnected) return;
-        
-        manager.updatePreferences({
-            enableVisionAcknowledgment: this.enableVisionAcknowledgment
-        });
-        this.log(`Sent vision acknowledgment preference: ${this.enableVisionAcknowledgment}`);
+        this.log('Subscribed to server-initiated camera capture requests');
+        this.log('The backend agentic tool router will request captures when vision is needed');
     }
     
     // ==================== Camera Capture ====================

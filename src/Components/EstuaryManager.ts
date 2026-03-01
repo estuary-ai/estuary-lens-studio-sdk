@@ -8,7 +8,7 @@
  * 3. Access via EstuaryManager.instance or import directly
  */
 
-import { EstuaryClient, ClientPreferences } from '../Core/EstuaryClient';
+import { EstuaryClient } from '../Core/EstuaryClient';
 import { EstuaryConfig, validateConfig } from '../Core/EstuaryConfig';
 import { ConnectionState, EventEmitter, CameraCaptureRequest } from '../Core/EstuaryEvents';
 import { SessionInfo } from '../Models/SessionInfo';
@@ -203,21 +203,6 @@ export class EstuaryManager extends EventEmitter<any> {
     }
 
     /**
-     * Signal to the server that a camera image is about to be sent.
-     * This allows the server to send a vision acknowledgment and wait for the image.
-     * @param text The transcript that triggered vision detection
-     * @param requestId Optional request ID for correlation
-     */
-    sendVisionPending(text: string, requestId?: string): void {
-        if (!this._client.isConnected) {
-            this.logError('Cannot send vision pending: not connected');
-            return;
-        }
-
-        this._client.sendVisionPending(text, requestId);
-    }
-
-    /**
      * Stream audio data to the server.
      * @param audioBase64 Base64-encoded audio
      */
@@ -282,21 +267,6 @@ export class EstuaryManager extends EventEmitter<any> {
     }
 
     /**
-     * Update session preferences on the server.
-     * Use this to configure behaviors like vision acknowledgment.
-     * @param preferences The preferences to update
-     */
-    updatePreferences(preferences: ClientPreferences): void {
-        if (!this._client.isConnected) {
-            this.logError('Cannot update preferences: not connected');
-            return;
-        }
-
-        this._client.updatePreferences(preferences);
-        this.log(`Updated preferences: enableVisionAcknowledgment=${preferences.enableVisionAcknowledgment}`);
-    }
-
-    /**
      * Dispose of the manager and release resources.
      */
     dispose(): void {
@@ -322,6 +292,11 @@ export class EstuaryManager extends EventEmitter<any> {
     private initialize(): void {
         if (this._initialized) return;
         this._initialized = true;
+
+        // Disable auto-reconnect at the client level — EstuaryCharacter
+        // already handles reconnection with smarter logic.  Having both
+        // layers reconnect independently causes racing WebSocket connections.
+        this._client.autoReconnect = false;
 
         // Subscribe to client events
         this._client.on('sessionConnected', (sessionInfo: SessionInfo) => this.handleSessionConnected(sessionInfo));

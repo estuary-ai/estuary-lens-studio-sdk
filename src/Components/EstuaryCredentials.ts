@@ -66,7 +66,7 @@ export class EstuaryCredentials extends BaseScriptComponent implements IEstuaryC
      */
     @input
     @hint("Your API key from the Estuary dashboard")
-    apiKey: string = "";
+    apiKey: string = "[YOUR_ESTUARY_API_KEY]";
     
     /** 
      * The character/agent ID to connect to.
@@ -74,11 +74,12 @@ export class EstuaryCredentials extends BaseScriptComponent implements IEstuaryC
      */
     @input
     @hint("Character/Agent ID from your Estuary dashboard")
-    characterId: string = "";
+    characterId: string = "[YOUR_ESTUARY_CHARACTER_ID]";
     
     /** 
      * The Estuary server URL.
      * Default: wss://api.estuary-ai.com
+     * Local dev: ws://localhost:4001
      */
     // @input
     // @hint("Estuary server URL (default: wss://api.estuary-ai.com)")
@@ -451,9 +452,9 @@ export function getCredentialsFromSceneObject(sceneObject: SceneObject | null): 
         return null;
     }
     
-    const componentCount = sceneObject.getComponentCount("Component.ScriptComponent");
-    for (let i = 0; i < componentCount; i++) {
-        const scriptComp = sceneObject.getComponentByIndex("Component.ScriptComponent", i) as any;
+    const scripts = sceneObject.getComponents("Component.ScriptComponent") as any[];
+    for (let i = 0; i < scripts.length; i++) {
+        const scriptComp = scripts[i];
         if (scriptComp && 
             typeof scriptComp.apiKey === 'string' && 
             typeof scriptComp.characterId === 'string' &&
