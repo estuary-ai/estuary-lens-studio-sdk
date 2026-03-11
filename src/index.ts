@@ -11,6 +11,7 @@
 export * from './Core/EstuaryClient';
 export * from './Core/EstuaryConfig';
 export * from './Core/EstuaryEvents';
+export * from './Core/EstuaryHttpClient';
 
 // Component exports
 export * from './Components/EstuaryManager';
@@ -26,6 +27,9 @@ export * from './Models/BotResponse';
 export * from './Models/BotVoice';
 export * from './Models/SttResponse';
 export * from './Models/InterruptData';
+export * from './Models/AgentResponse';
+export * from './Models/ModelStatusResponse';
+export * from './Models/CharacterListResponse';
 
 // Utility exports
 export * from './Utilities/AudioConverter';

@@ -42,6 +42,10 @@ max_audio_sample_rate: 16000           # Hardware-locked to 16kHz
 | scene_graph | Not applicable | No AR world model on Spectacles |
 | device_pose | Implemented | Via DeviceTracking |
 | preferences | Implemented | Full parity |
+| http_client | Implemented | Image-to-character (JSON+base64), model polling, character listing |
+| image_to_character | Implemented | Via JSON+base64 (no multipart/form-data on Spectacles) |
+| model_polling | Implemented | Exponential backoff 2s-10s |
+| character_listing | Implemented | Paginated GET /api/v1/characters |
 
 ## Architecture
 
@@ -56,6 +60,7 @@ src/
 │   └── VisionIntentDetector     — Detects vision-related queries in speech
 ├── Core/                    # Low-level client logic
 │   ├── EstuaryClient            — Socket.IO v4 client (manual protocol impl)
+│   ├── EstuaryHttpClient        — REST API client (image-to-character, model polling, characters)
 │   ├── EstuaryConfig            — Configuration holder
 │   └── EstuaryEvents            — Event name constants
 ├── Models/                  # Data models matching SDK_CONTRACT.md shapes

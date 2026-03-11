@@ -2,6 +2,7 @@
 export * from './EstuaryConfig';
 export * from './EstuaryEvents';
 export * from './EstuaryClient';
+export * from './EstuaryHttpClient';
 
 
 

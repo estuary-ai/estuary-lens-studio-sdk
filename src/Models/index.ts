@@ -4,6 +4,9 @@ export * from './BotResponse';
 export * from './BotVoice';
 export * from './SttResponse';
 export * from './InterruptData';
+export * from './AgentResponse';
+export * from './ModelStatusResponse';
+export * from './CharacterListResponse';
 
 
 
