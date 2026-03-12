@@ -1,16 +1,15 @@
 /**
  * HTTP client for Estuary REST API endpoints on Lens Studio / Spectacles.
  *
- * Uses Lens Studio's RemoteServiceHttpRequest + InternetModule.performHttpRequest()
- * for all HTTP operations. This is the same proven pattern used by EstuaryClient
- * for Engine.IO polling.
+ * Uses the global Fetch API (available in Lens Studio 5.3+ / Spectacles OS 5.58+)
+ * for all HTTP operations. Auth credentials are sent via X-API-Key and X-Player-Id
+ * headers rather than query parameters.
  *
  * Because Spectacles cannot use multipart/form-data (Fetch API only supports string
  * bodies), image uploads use JSON+base64 encoding.
  */
 
 import { EstuaryConfig } from './EstuaryConfig';
-import { getInternetModule } from './EstuaryClient';
 import { AgentResponse, parseAgentResponse } from '../Models/AgentResponse';
 import {
     ModelStatusResponse,
@@ -29,8 +28,7 @@ import { CharacterListResponse, parseCharacterListResponse } from '../Models/Cha
  * - Polling 3D model generation status with exponential backoff
  * - Listing characters via paginated GET
  *
- * Uses the same InternetModule as EstuaryClient. Call setInternetModule()
- * before using this client.
+ * Uses the global fetch() API. Requires Lens Studio 5.3+ / Spectacles OS 5.58+.
  */
 export class EstuaryHttpClient {
     private serverUrl: string;
@@ -38,7 +36,7 @@ export class EstuaryHttpClient {
     private playerId: string;
     private debugLogging: boolean;
 
-    /** Active polling timer reference (DelayedCallbackEvent or setTimeout handle) */
+    /** Whether polling is currently active */
     private _pollActive: boolean = false;
 
     constructor(config: EstuaryConfig) {
@@ -56,27 +54,10 @@ export class EstuaryHttpClient {
      *
      * @param imageBase64 Base64-encoded image data (no data URI prefix)
      * @param mimeType MIME type of the image (e.g., "image/jpeg", "image/png")
-     * @param onSuccess Called with the created AgentResponse on success
-     * @param onError Called with an error message on failure
+     * @returns The created AgentResponse
      */
-    uploadImageToCharacter(
-        imageBase64: string,
-        mimeType: string,
-        onSuccess: (agent: AgentResponse) => void,
-        onError: (error: string) => void
-    ): void {
+    async uploadImageToCharacter(imageBase64: string, mimeType: string): Promise<AgentResponse> {
         const url = this.getHttpBaseUrl() + '/api/generate/image-to-character';
-        const headers: Record<string, string> = {
-            'Content-Type': 'application/json',
-        };
-
-        if (this.apiKey) {
-            headers['X-API-Key'] = this.apiKey;
-        }
-        if (this.playerId) {
-            headers['X-Player-Id'] = this.playerId;
-        }
-
         const body = JSON.stringify({
             image: imageBase64,
             mime_type: mimeType,
@@ -84,20 +65,16 @@ export class EstuaryHttpClient {
 
         this.log(`Uploading image to character (${mimeType}, ${Math.round(imageBase64.length / 1024)}KB base64)`);
 
-        this.performRequest('Post', url, headers, body, (statusCode: number, responseBody: string) => {
-            if (statusCode >= 200 && statusCode < 300) {
-                try {
-                    const json = JSON.parse(responseBody);
-                    const agent = parseAgentResponse(json);
-                    this.log(`Character created: ${agent.id} "${agent.name}"`);
-                    onSuccess(agent);
-                } catch (e) {
-                    onError('Failed to parse character response: ' + e);
-                }
-            } else {
-                onError(`Upload failed with status ${statusCode}: ${responseBody.substring(0, 200)}`);
-            }
-        }, onError);
+        const { status, body: responseBody } = await this.fetchJson('POST', url, body);
+
+        if (status >= 200 && status < 300) {
+            const json = JSON.parse(responseBody);
+            const agent = parseAgentResponse(json);
+            this.log(`Character created: ${agent.id} "${agent.name}"`);
+            return agent;
+        } else {
+            throw new Error(`Upload failed with status ${status}: ${responseBody.substring(0, 200)}`);
+        }
     }
 
     /**
@@ -105,34 +82,19 @@ export class EstuaryHttpClient {
      * GET /api/generate/{agentId}/model-status.
      *
      * @param agentId Agent UUID to check
-     * @param onSuccess Called with the ModelStatusResponse
-     * @param onError Called with an error message on failure
+     * @returns The ModelStatusResponse
      */
-    getModelStatus(
-        agentId: string,
-        onSuccess: (status: ModelStatusResponse) => void,
-        onError: (error: string) => void
-    ): void {
+    async getModelStatus(agentId: string): Promise<ModelStatusResponse> {
         const url = this.getHttpBaseUrl() + '/api/generate/' + agentId + '/model-status';
-        const headers: Record<string, string> = {};
 
-        if (this.apiKey) {
-            headers['X-API-Key'] = this.apiKey;
+        const { status, body: responseBody } = await this.fetchJson('GET', url);
+
+        if (status >= 200 && status < 300) {
+            const json = JSON.parse(responseBody);
+            return parseModelStatusResponse(json);
+        } else {
+            throw new Error(`Model status request failed with status ${status}: ${responseBody.substring(0, 200)}`);
         }
-
-        this.performRequest('Get', url, headers, null, (statusCode: number, responseBody: string) => {
-            if (statusCode >= 200 && statusCode < 300) {
-                try {
-                    const json = JSON.parse(responseBody);
-                    const status = parseModelStatusResponse(json);
-                    onSuccess(status);
-                } catch (e) {
-                    onError('Failed to parse model status response: ' + e);
-                }
-            } else {
-                onError(`Model status request failed with status ${statusCode}: ${responseBody.substring(0, 200)}`);
-            }
-        }, onError);
     }
 
     /**
@@ -160,12 +122,14 @@ export class EstuaryHttpClient {
         let lastStatus = '';
         let lastProgress = -1;
 
-        const doPoll = (): void => {
+        const doPoll = async (): Promise<void> => {
             if (!this._pollActive) {
                 return;
             }
 
-            this.getModelStatus(agentId, (status: ModelStatusResponse) => {
+            try {
+                const status = await this.getModelStatus(agentId);
+
                 if (!this._pollActive) {
                     return;
                 }
@@ -192,19 +156,19 @@ export class EstuaryHttpClient {
 
                 // Schedule next poll with exponential backoff
                 intervalMs = Math.min(intervalMs * 1.5, maxIntervalMs);
-                this.scheduleDelayedCallback(doPoll, intervalMs);
+                this.scheduleDelayedCallback(() => { doPoll(); }, intervalMs);
 
-            }, (error: string) => {
+            } catch (error: any) {
                 if (!this._pollActive) {
                     return;
                 }
                 this._pollActive = false;
-                onError(error);
-            });
+                onError(error.message || String(error));
+            }
         };
 
         // Start first poll after initial interval
-        this.scheduleDelayedCallback(doPoll, intervalMs);
+        this.scheduleDelayedCallback(() => { doPoll(); }, intervalMs);
     }
 
     /**
@@ -218,19 +182,41 @@ export class EstuaryHttpClient {
      * List characters for the authenticated user.
      * GET /api/v1/characters with optional pagination.
      *
-     * @param onSuccess Called with the paginated CharacterListResponse
-     * @param onError Called with an error message on failure
      * @param limit Maximum number of results (default: 20)
      * @param offset Offset into the result set (default: 0)
+     * @returns The paginated CharacterListResponse
      */
-    getCharacters(
-        onSuccess: (response: CharacterListResponse) => void,
-        onError: (error: string) => void,
-        limit: number = 20,
-        offset: number = 0
-    ): void {
+    async getCharacters(limit: number = 20, offset: number = 0): Promise<CharacterListResponse> {
         const url = this.getHttpBaseUrl() + '/api/v1/characters?limit=' + limit + '&offset=' + offset;
+
+        const { status, body: responseBody } = await this.fetchJson('GET', url);
+
+        if (status >= 200 && status < 300) {
+            const json = JSON.parse(responseBody);
+            const response = parseCharacterListResponse(json);
+            this.log(`Characters listed: ${response.characters.length} of ${response.total}`);
+            return response;
+        } else {
+            throw new Error(`Character list request failed with status ${status}: ${responseBody.substring(0, 200)}`);
+        }
+    }
+
+    // ---- Private helpers ----
+
+    /**
+     * Perform an HTTP request using the global Fetch API.
+     *
+     * @param method HTTP method ('GET' or 'POST')
+     * @param url Full request URL
+     * @param body Request body (for POST) or undefined (for GET)
+     * @returns Object with status code and response body text
+     */
+    private async fetchJson(method: 'GET' | 'POST', url: string, body?: string): Promise<{ status: number; body: string }> {
         const headers: Record<string, string> = {};
+
+        if (method === 'POST') {
+            headers['Content-Type'] = 'application/json';
+        }
 
         if (this.apiKey) {
             headers['X-API-Key'] = this.apiKey;
@@ -239,116 +225,14 @@ export class EstuaryHttpClient {
             headers['X-Player-Id'] = this.playerId;
         }
 
-        this.performRequest('Get', url, headers, null, (statusCode: number, responseBody: string) => {
-            if (statusCode >= 200 && statusCode < 300) {
-                try {
-                    const json = JSON.parse(responseBody);
-                    const response = parseCharacterListResponse(json);
-                    this.log(`Characters listed: ${response.characters.length} of ${response.total}`);
-                    onSuccess(response);
-                } catch (e) {
-                    onError('Failed to parse character list response: ' + e);
-                }
-            } else {
-                onError(`Character list request failed with status ${statusCode}: ${responseBody.substring(0, 200)}`);
-            }
-        }, onError);
-    }
+        this.log(`HTTP ${method} ${url.substring(0, 100)}`);
 
-    // ---- Private helpers ----
+        const response = await fetch(url, { method, headers, body });
+        const text = await response.text();
 
-    /**
-     * Perform an HTTP request using Lens Studio's RemoteServiceHttpRequest API.
-     *
-     * @param method HTTP method ('Get' or 'Post')
-     * @param url Full request URL
-     * @param headers Request headers to set
-     * @param body Request body (for POST) or null (for GET)
-     * @param onResponse Called with (statusCode, responseBody)
-     * @param onError Called with error message
-     */
-    private performRequest(
-        method: string,
-        url: string,
-        headers: Record<string, string>,
-        body: string | null,
-        onResponse: (statusCode: number, body: string) => void,
-        onError: (error: string) => void
-    ): void {
-        const internetModule = getInternetModule();
+        this.log(`HTTP response: status=${response.status}, body=${text.substring(0, 200)}`);
 
-        // @ts-ignore - Lens Studio global API
-        if (typeof RemoteServiceHttpRequest === 'undefined') {
-            onError('RemoteServiceHttpRequest is not available on this platform');
-            return;
-        }
-
-        if (!internetModule || typeof internetModule.performHttpRequest !== 'function') {
-            onError('InternetModule is not set. Call setInternetModule() before using EstuaryHttpClient.');
-            return;
-        }
-
-        // @ts-ignore - Lens Studio global API
-        const request = RemoteServiceHttpRequest.create();
-        request.url = url;
-
-        // Set HTTP method
-        if (method === 'Post') {
-            // @ts-ignore - Lens Studio enum
-            request.method = RemoteServiceHttpRequest.HttpRequestMethod.Post;
-        } else {
-            // @ts-ignore - Lens Studio enum
-            request.method = RemoteServiceHttpRequest.HttpRequestMethod.Get;
-        }
-
-        // Set body for POST requests
-        if (body !== null) {
-            request.body = body;
-        }
-
-        // Set Content-Type if present in headers
-        if (headers['Content-Type']) {
-            request.contentType = headers['Content-Type'];
-        }
-
-        // Lens Studio's RemoteServiceHttpRequest does not support setting arbitrary
-        // custom headers directly. Auth headers (X-API-Key, X-Player-Id) are passed
-        // as query parameters instead.
-        let authUrl = url;
-        const queryParams: string[] = [];
-
-        if (headers['X-API-Key']) {
-            queryParams.push('api_key=' + encodeURIComponent(headers['X-API-Key']));
-        }
-        if (headers['X-Player-Id']) {
-            queryParams.push('player_id=' + encodeURIComponent(headers['X-Player-Id']));
-        }
-
-        if (queryParams.length > 0) {
-            const separator = authUrl.indexOf('?') >= 0 ? '&' : '?';
-            authUrl = authUrl + separator + queryParams.join('&');
-            request.url = authUrl;
-        }
-
-        this.log(`HTTP ${method} ${request.url.substring(0, 100)}`);
-
-        internetModule.performHttpRequest(request, (response: any) => {
-            try {
-                const statusCode = response.statusCode || response.code || 0;
-                const responseBody = response.body || '';
-
-                this.log(`HTTP response: status=${statusCode}, body=${responseBody.substring(0, 200)}`);
-
-                if (statusCode === 0) {
-                    onError('Network error: no response received');
-                    return;
-                }
-
-                onResponse(statusCode, responseBody);
-            } catch (e) {
-                onError('Error processing HTTP response: ' + e);
-            }
-        });
+        return { status: response.status, body: text };
     }
 
     /**
