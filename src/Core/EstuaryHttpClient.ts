@@ -98,6 +98,32 @@ export class EstuaryHttpClient {
     }
 
     /**
+     * Trigger 3D model generation for an existing agent.
+     * POST /api/generate/{agentId}/generate-model.
+     *
+     * Also serves as retry when previous generation failed.
+     * Throws on 409 if generation already in progress.
+     *
+     * @param agentId Agent UUID to generate model for
+     * @returns The initial ModelStatusResponse with modelStatus "generating"
+     */
+    async generateModel(agentId: string): Promise<ModelStatusResponse> {
+        const url = this.getHttpBaseUrl() + '/api/generate/' + agentId + '/generate-model';
+        const body = JSON.stringify({});
+
+        this.log(`Triggering model generation for agent ${agentId}`);
+
+        const { status, body: responseBody } = await this.fetchJson('POST', url, body);
+
+        if (status >= 200 && status < 300) {
+            const json = JSON.parse(responseBody);
+            return parseModelStatusResponse(json);
+        } else {
+            throw new Error(`Generate model failed with status ${status}: ${responseBody.substring(0, 200)}`);
+        }
+    }
+
+    /**
      * Poll model generation status with exponential backoff until completion or failure.
      *
      * @param agentId Agent UUID to poll
