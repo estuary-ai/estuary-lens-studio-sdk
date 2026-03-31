@@ -115,6 +115,8 @@ export class EstuaryVoiceConnection extends BaseScriptComponent {
     private microphone: EstuaryMicrophone | null = null;
     private actionManager: EstuaryActionManager | null = null;
     private dynamicAudioOutput: DynamicAudioOutput | null = null;
+    private audioComponent: AudioComponent | null = null;
+    private _outputVolume: number = 1.0;
     private playerId: string = "";
     private updateEvent: SceneEvent | null = null;
     private audioInitialized: boolean = false;
@@ -396,7 +398,9 @@ export class EstuaryVoiceConnection extends BaseScriptComponent {
             // Set AudioComponent to Low Latency mode for faster TTS playback on Spectacles
             const audioComp = this.dynamicAudioOutputObject.getComponent("Component.AudioComponent");
             if (audioComp) {
-                (audioComp as AudioComponent).playbackMode = Audio.PlaybackMode.LowLatency;
+                this.audioComponent = audioComp as AudioComponent;
+                this.audioComponent.playbackMode = Audio.PlaybackMode.LowLatency;
+                this.audioComponent.volume = this._outputVolume;
                 this.log("AudioComponent set to Low Latency mode");
             }
         } else {
@@ -536,6 +540,19 @@ export class EstuaryVoiceConnection extends BaseScriptComponent {
     
     // ==================== Public Methods ====================
     
+    /** Output volume for bot audio (0.0 = muted, 1.0 = full). Clamped to 0-1. */
+    get outputVolume(): number {
+        return this._outputVolume;
+    }
+
+    set outputVolume(value: number) {
+        this._outputVolume = Math.max(0, Math.min(1, value));
+        if (this.audioComponent) {
+            this.audioComponent.volume = this._outputVolume;
+        }
+        this.log(`Output volume set to ${this._outputVolume.toFixed(2)}`);
+    }
+
     /** Send a text message to the AI */
     sendMessage(text: string): void {
         if (this.character?.isConnected) {
