@@ -36,16 +36,17 @@ max_audio_sample_rate: 16000           # Hardware-locked to 16kHz
 | voice_livekit | Not available | Spectacles lacks WebRTC — voice_websocket is the only path |
 | interrupts | Implemented | Full parity |
 | audio_playback_tracking | Implemented | Full parity |
-| vision_camera | Implemented | On-demand via CameraModule + VisionIntentDetector |
+| vision_camera | Implemented | On-demand via CameraModule |
 | video_streaming_livekit | Not available | No WebRTC |
 | video_streaming_websocket | Not implemented | Could be added via `video_frame` event if needed |
 | scene_graph | Not applicable | No AR world model on Spectacles |
 | device_pose | Implemented | Via DeviceTracking |
-| preferences | Implemented | Full parity |
+| preferences | Not implemented | No update_preferences event or enableVisionAcknowledgment handling |
 | http_client | Implemented | Image-to-character (JSON+base64), model polling, character listing |
 | image_to_character | Implemented | Via JSON+base64 (no multipart/form-data on Spectacles) |
 | model_polling | Implemented | Exponential backoff 2s-10s |
 | character_listing | Implemented | Paginated GET /api/v1/characters |
+| glb_download | Implemented | downloadAndInstantiateGlb() on EstuaryHttpClient; uses InternetModule + RemoteMediaModule + GltfAsset pipeline |
 
 ## Architecture
 
@@ -56,8 +57,7 @@ src/
 │   ├── EstuaryCharacter         — Per-character instance, EventEmitter pattern
 │   ├── EstuaryMicrophone        — Audio capture with chunking
 │   ├── EstuaryCredentials       — API key + character config
-│   ├── EstuaryActionManager     — Parses action tags from bot responses
-│   └── VisionIntentDetector     — Detects vision-related queries in speech
+│   └── EstuaryActionManager     — Parses action tags from bot responses
 ├── Core/                    # Low-level client logic
 │   ├── EstuaryClient            — Socket.IO v4 client (manual protocol impl)
 │   ├── EstuaryHttpClient        — REST API client (image-to-character, model polling, characters)
@@ -89,8 +89,7 @@ WebSocket connections do not work in Lens Studio's Preview mode. All network tes
 
 ### Vision
 - Camera capture is on-demand via `camera_image` event
-- `VisionIntentDetector` auto-detects phrases like "what do you see?" and triggers capture
-- Server can also request capture via `camera_capture` event
+- Server can request capture via `camera_capture` event
 
 ## Code Style
 
