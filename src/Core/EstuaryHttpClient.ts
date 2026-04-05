@@ -347,6 +347,7 @@ export class EstuaryHttpClient {
 
         this.log(`HTTP ${method} ${url.substring(0, 100)}`);
 
+        // @ts-ignore - Fetch API available at runtime in Lens Studio 5.3+ / Spectacles OS 5.58+
         const response = await fetch(url, { method, headers, body });
         const text = await response.text();
 
@@ -380,7 +381,9 @@ export class EstuaryHttpClient {
             const event = DelayedCallbackEvent.create();
             event.bind(callback);
             event.reset(delayMs / 1000); // Lens Studio uses seconds
+        // @ts-ignore - setTimeout available in some Lens Studio environments
         } else if (typeof setTimeout !== 'undefined') {
+            // @ts-ignore
             setTimeout(callback, delayMs);
         } else {
             // Fallback: call immediately (not ideal but prevents hanging)
