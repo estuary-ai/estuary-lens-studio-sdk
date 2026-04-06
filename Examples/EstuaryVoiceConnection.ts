@@ -272,22 +272,42 @@ export class EstuaryVoiceConnection extends BaseScriptComponent {
     }
     
     private disconnect(): void {
+        // Each step wrapped individually — a crash in one shouldn't prevent cleanup of others
         if (this.microphone) {
-            this.microphone.stopRecording();
-            this.microphone.dispose();
+            try {
+                this.microphone.stopRecording();
+                this.microphone.dispose();
+            } catch (e: any) {
+                print('[EstuaryVoiceConnection] Mic cleanup error: ' + (e.message || e));
+            }
             this.microphone = null;
         }
         if (this.actionManager) {
-            this.actionManager.dispose();
+            try {
+                this.actionManager.dispose();
+            } catch (e: any) {
+                print('[EstuaryVoiceConnection] ActionManager cleanup error: ' + (e.message || e));
+            }
             this.actionManager = null;
         }
-        if (this.dynamicAudioOutput) {
-            this.dynamicAudioOutput.interruptAudioOutput();
-            this.dynamicAudioOutput = null;
-        }
+        // Disconnect character BEFORE interrupting audio —
+        // stops the WebSocket from feeding new audio chunks during teardown
         if (this.character) {
-            this.character.dispose();
+            try {
+                this.character.dispose();
+            } catch (e: any) {
+                print('[EstuaryVoiceConnection] Character dispose error: ' + (e.message || e));
+            }
             this.character = null;
+        }
+        // Interrupt audio but DON'T null — dynamicAudioOutput is a persistent hardware
+        // component that gets double-initialized if re-discovered, causing crash on 2nd switch
+        if (this.dynamicAudioOutput) {
+            try {
+                this.dynamicAudioOutput.interruptAudioOutput();
+            } catch (e: any) {
+                print('[EstuaryVoiceConnection] Audio interrupt error: ' + (e.message || e));
+            }
         }
     }
     

@@ -31,6 +31,14 @@ import { CharacterListResponse, parseCharacterListResponse } from '../Models/Cha
  *
  * Uses the global fetch() API. Requires Lens Studio 5.3+ / Spectacles OS 5.58+.
  */
+/** Optional parameters for image-to-character generation. */
+export interface ImageToCharacterOptions {
+    /** Custom appearance description (replaces default, char limit applied automatically) */
+    appearancePrompt?: string;
+    /** Custom voice description (replaces default, char limit applied automatically) */
+    voicePrompt?: string;
+}
+
 export class EstuaryHttpClient {
     private serverUrl: string;
     private apiKey: string;
@@ -55,14 +63,22 @@ export class EstuaryHttpClient {
      *
      * @param imageBase64 Base64-encoded image data (no data URI prefix)
      * @param mimeType MIME type of the image (e.g., "image/jpeg", "image/png")
+     * @param options Optional appearance and voice prompt overrides
      * @returns The created AgentResponse
      */
-    async uploadImageToCharacter(imageBase64: string, mimeType: string): Promise<AgentResponse> {
+    async uploadImageToCharacter(imageBase64: string, mimeType: string, options?: ImageToCharacterOptions): Promise<AgentResponse> {
         const url = this.getHttpBaseUrl() + '/api/generate/image-to-character';
-        const body = JSON.stringify({
+        const payload: Record<string, string> = {
             image: imageBase64,
             mime_type: mimeType,
-        });
+        };
+        if (options?.appearancePrompt) {
+            payload.appearance_prompt = options.appearancePrompt;
+        }
+        if (options?.voicePrompt) {
+            payload.voice_prompt = options.voicePrompt;
+        }
+        const body = JSON.stringify(payload);
 
         this.log(`Uploading image to character (${mimeType}, ${Math.round(imageBase64.length / 1024)}KB base64)`);
 
