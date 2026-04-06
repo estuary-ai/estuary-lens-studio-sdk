@@ -197,7 +197,30 @@ export class EstuaryVoiceConnection extends BaseScriptComponent {
     onDestroy() {
         this.disconnect();
     }
-    
+
+    /**
+     * Switch to a different character. Disconnects current, reconnects with new ID.
+     * Used by the gallery to switch characters without destroying the SceneObject.
+     */
+    public switchCharacter(characterId: string): void {
+        if (!this.credentials) {
+            print("[EstuaryVoiceConnection] ERROR: No credentials for switchCharacter");
+            return;
+        }
+
+        this.log("Switching to character: " + characterId);
+
+        // Tear down old connection (mic, audio, action manager, character)
+        this.disconnect();
+
+        // Update credentials
+        this.credentials.characterId = characterId;
+
+        // Reconnect with the new character ID
+        // (reuses existing credentials, InternetModule, playerId from onAwake)
+        this.connect();
+    }
+
     // ==================== Connection ====================
     
     private connect(): void {
