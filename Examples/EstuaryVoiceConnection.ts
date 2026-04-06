@@ -101,12 +101,12 @@ export class EstuaryVoiceConnection extends BaseScriptComponent {
     @hint("Connect the InternetModule from your scene")
     internetModule: InternetModule;
     
-    /** 
+    /**
      * Default sample rate for audio playback.
-     * 16000Hz is optimized for Snap Spectacles hardware.
-     * Other platforms may use 48000Hz.
+     * 24000Hz matches Snap's official Spectacles examples.
+     * Mic input remains 16kHz (hardware-locked).
      */
-    audioSampleRate: number = 16000;
+    audioSampleRate: number = 24000;
 
     
     // ==================== Private Members ====================
@@ -276,7 +276,8 @@ export class EstuaryVoiceConnection extends BaseScriptComponent {
         if (this.microphone) {
             try {
                 this.microphone.stopRecording();
-                this.microphone.dispose();
+                // Don't call dispose() — it nulls _microphoneRecorder and the
+                // onAudioFrame subscription is never cleaned up on the hardware recorder.
             } catch (e: any) {
                 print('[EstuaryVoiceConnection] Mic cleanup error: ' + (e.message || e));
             }
@@ -405,13 +406,27 @@ export class EstuaryVoiceConnection extends BaseScriptComponent {
      * from connect() so that package scripts from RemoteServiceGateway.lspkg
      * have had time to run their onAwake() and expose their APIs.
      */
+    /** Cached MicrophoneRecorder hardware reference (persistent across connections) */
+    private _cachedMicRecorder: MicrophoneRecorder | null = null;
+
     private discoverHardwareComponents(): void {
-        // Skip if already discovered (e.g. on reconnect)
+        // Audio output: persistent hardware, discover once
         if (!this.dynamicAudioOutput) {
             this.discoverDynamicAudioOutput();
         }
+        // Mic: full discovery on first connect, reuse cached recorder on reconnect.
+        // setMicrophoneRecorder adds an onAudioFrame listener each time, but old
+        // listeners are harmless — the old mic has _isRecording=false so handleAudioFrame
+        // returns immediately. Only the current mic processes frames.
         if (this.microphone && !this.microphone.isRecording) {
-            this.discoverMicrophoneRecorder();
+            if (!this._cachedMicRecorder) {
+                this.discoverMicrophoneRecorder();
+                this._cachedMicRecorder = (this.microphone as any)._microphoneRecorder || null;
+            } else {
+                this.microphone.setMicrophoneRecorder(this._cachedMicRecorder);
+                this.character!.microphone = this.microphone;
+                this.log('Reconnected mic to cached MicrophoneRecorder');
+            }
         }
     }
     

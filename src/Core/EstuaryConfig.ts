@@ -42,11 +42,11 @@ export interface EstuaryConfig {
 
 /**
  * Default configuration values.
- * Note: playbackSampleRate is 16000 for Spectacles hardware optimization.
+ * Note: playbackSampleRate is 24000 to match Snap's recommended output rate.
  */
 export const DEFAULT_CONFIG: Required<Omit<EstuaryConfig, 'serverUrl' | 'apiKey' | 'characterId' | 'playerId'>> = {
     recordingSampleRate: 16000,
-    playbackSampleRate: 16000,  // 16kHz for Spectacles (hardware optimized)
+    playbackSampleRate: 24000,  // 24kHz output (Snap's recommended rate; mic input stays 16kHz)
     audioChunkDurationMs: 100,
     autoReconnect: true,
     maxReconnectAttempts: 5,
