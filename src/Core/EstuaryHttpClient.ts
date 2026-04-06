@@ -238,6 +238,28 @@ export class EstuaryHttpClient {
     }
 
     /**
+     * Get a single character by ID.
+     * GET /api/v1/characters/{characterId}.
+     *
+     * @param characterId Character/agent UUID
+     * @returns The AgentResponse
+     */
+    async getCharacter(characterId: string): Promise<AgentResponse> {
+        const url = this.getHttpBaseUrl() + '/api/v1/characters/' + characterId;
+
+        const { status, body: responseBody } = await this.fetchJson('GET', url);
+
+        if (status >= 200 && status < 300) {
+            const json = JSON.parse(responseBody);
+            const agent = parseAgentResponse(json);
+            this.log(`Character loaded: ${agent.id} "${agent.name}"`);
+            return agent;
+        } else {
+            throw new Error(`Get character failed with status ${status}: ${responseBody.substring(0, 200)}`);
+        }
+    }
+
+    /**
      * Download a GLB model from a URL and instantiate it into the Lens Studio scene.
      *
      * Uses the three-step Lens Studio pipeline:
@@ -284,6 +306,8 @@ export class EstuaryHttpClient {
                 resource,
                 (gltfAsset: any) => {
                     this.log('GLB loaded as GltfAsset, instantiating...');
+                    this.log('GltfAsset name: ' + (gltfAsset.name || 'unnamed'));
+                    this.log('GltfAsset type: ' + (gltfAsset.getTypeName ? gltfAsset.getTypeName() : typeof gltfAsset));
 
                     // Build GltfSettings with sensible defaults
                     let settings = gltfSettings;
@@ -293,14 +317,33 @@ export class EstuaryHttpClient {
                             // @ts-ignore
                             settings = GltfSettings.create();
                             settings.convertMetersToCentimeters = true;
+                            this.log('GltfSettings created with convertMetersToCentimeters=true');
+                        } else {
+                            this.log('GltfSettings not available');
                         }
+                    }
+
+                    // Try sync with settings first (applies unit conversion)
+                    try {
+                        this.log('Trying tryInstantiateWithSetting (sync)...');
+                        const sceneObject = settings
+                            ? gltfAsset.tryInstantiateWithSetting(parent, material, settings)
+                            : gltfAsset.tryInstantiate(parent, material);
+                        if (sceneObject) {
+                            this.log('GLB instantiated successfully (sync)');
+                            resolve(sceneObject);
+                            return;
+                        }
+                        this.log('Sync instantiate returned null, trying async...');
+                    } catch (syncErr: any) {
+                        this.log('Sync instantiate failed: ' + (syncErr.message || syncErr) + ', trying async...');
                     }
 
                     gltfAsset.tryInstantiateAsync(
                         parent,
                         material,
                         (sceneObject: any) => {
-                            this.log('GLB instantiated successfully');
+                            this.log('GLB instantiated successfully (async)');
                             resolve(sceneObject);
                         },
                         (error: string) => {
@@ -332,28 +375,51 @@ export class EstuaryHttpClient {
      * @returns Object with status code and response body text
      */
     private async fetchJson(method: 'GET' | 'POST', url: string, body?: string): Promise<{ status: number; body: string }> {
-        const headers: Record<string, string> = {};
-
-        if (method === 'POST') {
-            headers['Content-Type'] = 'application/json';
-        }
-
-        if (this.apiKey) {
-            headers['X-API-Key'] = this.apiKey;
-        }
-        if (this.playerId) {
-            headers['X-Player-Id'] = this.playerId;
-        }
-
         this.log(`HTTP ${method} ${url.substring(0, 100)}`);
 
-        // @ts-ignore - Fetch API available at runtime in Lens Studio 5.3+ / Spectacles OS 5.58+
-        const response = await fetch(url, { method, headers, body });
-        const text = await response.text();
+        const internetModule = getInternetModule();
+        if (!internetModule) {
+            throw new Error('InternetModule not available. Call setInternetModule() first.');
+        }
 
-        this.log(`HTTP response: status=${response.status}, body=${text.substring(0, 200)}`);
+        return new Promise<{ status: number; body: string }>((resolve, reject) => {
+            try {
+                // @ts-ignore - Lens Studio global RemoteServiceHttpRequest
+                const request = RemoteServiceHttpRequest.create();
+                request.url = url;
+                // @ts-ignore - Lens Studio HttpRequestMethod enum
+                request.method = method === 'POST'
+                    ? RemoteServiceHttpRequest.HttpRequestMethod.Post
+                    : RemoteServiceHttpRequest.HttpRequestMethod.Get;
 
-        return { status: response.status, body: text };
+                // Set headers via setHeader()
+                if (method === 'POST') {
+                    request.setHeader('Content-Type', 'application/json');
+                }
+                if (this.apiKey) {
+                    request.setHeader('X-API-Key', this.apiKey);
+                }
+                if (this.playerId) {
+                    request.setHeader('X-Player-Id', this.playerId);
+                }
+                // Skip ngrok free-tier browser interstitial
+                request.setHeader('ngrok-skip-browser-warning', 'true');
+                request.setHeader('User-Agent', 'EstuarySDK/1.0');
+
+                if (body) {
+                    request.body = body;
+                }
+
+                internetModule.performHttpRequest(request, (response: any) => {
+                    const statusCode = response.statusCode || 0;
+                    const responseBody = response.body || '';
+                    this.log(`HTTP response: status=${statusCode}, body=${responseBody.substring(0, 200)}`);
+                    resolve({ status: statusCode, body: responseBody });
+                });
+            } catch (error: any) {
+                reject(new Error('HTTP request failed: ' + (error.message || String(error))));
+            }
+        });
     }
 
     /**
