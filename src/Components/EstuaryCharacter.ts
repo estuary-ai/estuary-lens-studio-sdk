@@ -223,6 +223,22 @@ export class EstuaryCharacter
     }
 
     /**
+     * Script this character to say a specific prewritten line.
+     * @param text The scripted line text
+     * @param textOnly If true, text-only response (no TTS audio). Default false.
+     */
+    sayLine(text: string, textOnly: boolean = false): void {
+        if (!this._isConnected) {
+            print(`[EstuaryCharacter] Cannot say line: not connected`);
+            return;
+        }
+        // Reset partial response state (new response incoming)
+        this._currentPartialResponse = '';
+        this._currentMessageId = '';
+        EstuaryManager.instance.sayLine(text, textOnly);
+    }
+
+    /**
      * Start a voice session for this character.
      */
     startVoiceSession(): void {

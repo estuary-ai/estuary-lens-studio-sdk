@@ -272,6 +272,21 @@ export class EstuaryClient extends EventEmitter<any> {
     }
 
     /**
+     * Script the character to say a specific prewritten line.
+     * @param text The scripted line text
+     * @param textOnly If true, text-only response (no TTS audio). Default false.
+     */
+    sayLine(text: string, textOnly: boolean = false): void {
+        if (!this.isConnected) {
+            this.logError('Cannot say line: not connected');
+            return;
+        }
+        const payload = { text, text_only: textOnly };
+        this.emitSocketEvent('say_line', payload);
+        this.log(`Say line: ${text.substring(0, 50)}`);
+    }
+
+    /**
      * Stream audio data to the server for speech-to-text.
      * @param audioBase64 Base64-encoded 16-bit PCM audio at 16kHz
      */

@@ -203,6 +203,19 @@ export class EstuaryManager extends EventEmitter<any> {
     }
 
     /**
+     * Script the character to say a specific prewritten line.
+     * @param text The scripted line text
+     * @param textOnly If true, text-only response (no TTS audio). Default false.
+     */
+    sayLine(text: string, textOnly: boolean = false): void {
+        if (!this._client.isConnected) {
+            this.logError('Cannot say line: not connected');
+            return;
+        }
+        this._client.sayLine(text, textOnly);
+    }
+
+    /**
      * Stream audio data to the server.
      * @param audioBase64 Base64-encoded audio
      */
