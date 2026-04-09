@@ -277,6 +277,10 @@ export class EstuaryClient extends EventEmitter<any> {
      * @param textOnly If true, text-only response (no TTS audio). Default false.
      */
     sayLine(text: string, textOnly: boolean = false): void {
+        if (!text || !text.trim()) {
+            this.logError('Cannot say line: text is empty');
+            return;
+        }
         if (!this.isConnected) {
             this.logError('Cannot say line: not connected');
             return;
