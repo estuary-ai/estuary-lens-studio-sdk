@@ -23,8 +23,9 @@ camera_capture: true                   # CameraModule — on-demand capture
 livekit_video: false                   # No WebRTC, no LiveKit video
 scene_graph: false                     # Not applicable on Spectacles
 device_pose: true                      # DeviceTracking module
-min_audio_sample_rate: 16000
-max_audio_sample_rate: 16000           # Hardware-locked to 16kHz
+min_audio_sample_rate: 16000           # Recording: hardware-locked to 16kHz
+max_audio_sample_rate: 24000           # Playback: 24kHz preferred TTS default
+default_playback_sample_rate: 24000    # TTS audio generated at 24kHz
 ```
 
 ## Parity Status
@@ -80,7 +81,7 @@ Lens Studio's WebSocket implementation concatenates rapidly-sent messages, causi
 
 ### Audio Constraints
 - Recording: 16kHz mono 16-bit PCM only (hardware limitation)
-- Playback: 16kHz mono only
+- Playback: 24kHz mono preferred (TTS default sample rate)
 - Uses Lens Studio's `AudioTrackAsset` for both input and output
 - Audio chunks are base64-encoded for WebSocket transport
 
