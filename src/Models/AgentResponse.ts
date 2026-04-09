@@ -27,8 +27,6 @@ export interface AgentResponse {
     sourceImageUrl: string | null;
     /** Player who created this character */
     playerId: string | null;
-    /** Voice preset identifier */
-    voicePreset: string | null;
     /** TTS provider name */
     ttsProvider: string;
     /** TTS model name */
@@ -68,8 +66,6 @@ interface AgentResponseJson {
     sourceImageUrl?: string;
     player_id?: string;
     playerId?: string;
-    voice_preset?: string;
-    voicePreset?: string;
     tts_provider?: string;
     ttsProvider?: string;
     tts_model?: string;
@@ -104,7 +100,6 @@ export function parseAgentResponse(json: AgentResponseJson): AgentResponse {
         modelStatus: json.modelStatus || json.model_status || null,
         sourceImageUrl: json.sourceImageUrl || json.source_image_url || null,
         playerId: json.playerId || json.player_id || null,
-        voicePreset: json.voicePreset || json.voice_preset || null,
         ttsProvider: json.ttsProvider || json.tts_provider || '',
         ttsModel: json.ttsModel || json.tts_model || '',
         ttsVoice: json.ttsVoice || json.tts_voice || null,
