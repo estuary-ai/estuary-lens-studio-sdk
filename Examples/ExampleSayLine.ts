@@ -14,7 +14,8 @@
  * - Story-driven cutscene lines
  *
  * Setup in Lens Studio:
- * 1. Make sure EstuaryVoiceConnection is set up in your scene and working
+ * 1. Make sure either EstuaryVoiceConnection OR EstuaryTextConnection is set up
+ *    in your scene and working (this script needs an active Estuary connection)
  * 2. Create a SceneObject (e.g., "SayLine Test")
  * 3. Add this script to the SceneObject
  * 4. Tick "Auto Speak On Connect" to test immediately

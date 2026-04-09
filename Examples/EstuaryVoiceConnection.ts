@@ -36,7 +36,6 @@ import { EstuaryCredentials, IEstuaryCredentials, getCredentialsFromSceneObject 
 import { EstuaryActionManager, EstuaryActions } from '../src/Components/EstuaryActionManager';
 import { EstuaryManager } from '../src/Components/EstuaryManager';
 import { EstuaryConfig } from '../src/Core/EstuaryConfig';
-import { setInternetModule } from '../src/Core/EstuaryClient';
 import { SessionInfo } from '../src/Models/SessionInfo';
 import { BotResponse } from '../src/Models/BotResponse';
 import { BotVoice } from '../src/Models/BotVoice';
@@ -147,8 +146,8 @@ export class EstuaryVoiceConnection extends BaseScriptComponent {
         
         // Set up InternetModule for WebSocket connections (required for Lens Studio 5.9+)
         if (this.internetModule) {
-            setInternetModule(this.internetModule);
-            this.log("InternetModule configured");
+            EstuaryManager.instance.internetModule = this.internetModule;
+            this.log("InternetModule configured via EstuaryManager");
         } else {
             print("[EstuaryVoiceConnection] ERROR: InternetModule is required! Add it to your scene and connect it.");
             return;

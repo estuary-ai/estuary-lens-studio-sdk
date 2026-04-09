@@ -8,7 +8,7 @@
  * 3. Access via EstuaryManager.instance or import directly
  */
 
-import { EstuaryClient } from '../Core/EstuaryClient';
+import { EstuaryClient, setInternetModule, getInternetModule } from '../Core/EstuaryClient';
 import { EstuaryConfig, validateConfig } from '../Core/EstuaryConfig';
 import { ConnectionState, EventEmitter, CameraCaptureRequest } from '../Core/EstuaryEvents';
 import { SessionInfo } from '../Models/SessionInfo';
@@ -89,6 +89,19 @@ export class EstuaryManager extends EventEmitter<any> {
         this._client.debugLogging = value;
     }
 
+    /**
+     * Set the InternetModule for WebSocket and HTTP connections.
+     * Must be called before connect() on Spectacles (Lens Studio 5.9+).
+     */
+    set internetModule(module: any) {
+        setInternetModule(module);
+        this.log('InternetModule configured via EstuaryManager');
+    }
+
+    get internetModule(): any {
+        return getInternetModule();
+    }
+
     // ==================== Public Methods ====================
 
     /**
@@ -108,6 +121,11 @@ export class EstuaryManager extends EventEmitter<any> {
         const validationError = validateConfig(this._config);
         if (validationError) {
             this.logError(`Cannot connect: ${validationError}`);
+            return;
+        }
+
+        if (!getInternetModule()) {
+            this.logError('Cannot connect: InternetModule is not set. Set EstuaryManager.instance.internetModule before connecting.');
             return;
         }
 

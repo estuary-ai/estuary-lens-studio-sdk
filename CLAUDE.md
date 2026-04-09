@@ -77,7 +77,7 @@ These are non-negotiable constraints imposed by the Spectacles hardware and Lens
 Lens Studio's WebSocket implementation concatenates rapidly-sent messages, causing protocol corruption. The `EstuaryClient` enforces a **100ms minimum gap** between WebSocket sends via an internal queue. Never bypass this.
 
 ### InternetModule Initialization
-`InternetModule` must be set via `setInternetModule()` before any connection attempt. The module is injected as a ScriptComponent input, not fetched programmatically.
+`InternetModule` must be set via `EstuaryManager.instance.internetModule = module` before any connection attempt. Example scripts (EstuaryVoiceConnection, EstuaryTextConnection) accept it as an `@input` and pass it to EstuaryManager. The low-level `setInternetModule()` in EstuaryClient still works but is considered internal.
 
 ### Audio Constraints
 - Recording: 16kHz mono 16-bit PCM only (hardware limitation)
