@@ -14,11 +14,13 @@
  * - Story-driven cutscene lines
  *
  * Setup in Lens Studio:
- * 1. Make sure EstuaryVoiceConnection (or EstuaryCharacter) is set up in your scene
+ * 1. Make sure EstuaryVoiceConnection is set up in your scene and working
  * 2. Create a SceneObject (e.g., "SayLine Test")
  * 3. Add this script to the SceneObject
- * 4. Drag your EstuaryVoiceConnection SceneObject to the voiceConnection input
+ * 4. Tick "Auto Speak On Connect" to test immediately
  * 5. Run the scene — the character will speak the first line after connecting
+ *
+ * No inputs needed — this script uses EstuaryManager singleton directly.
  *
  * To trigger additional lines at runtime, call:
  *   exampleSayLine.sayNext()         — speak the next scripted line (with TTS)
@@ -26,26 +28,13 @@
  *   exampleSayLine.say("custom text") — speak any arbitrary text
  */
 
-import { EstuaryCharacter } from '../src/Components/EstuaryCharacter';
-import { BotResponse } from '../src/Models/BotResponse';
-import { BotVoice } from '../src/Models/BotVoice';
-import { SessionInfo } from '../src/Models/SessionInfo';
+import { EstuaryManager } from '../src/Components/EstuaryManager';
+import { ConnectionState } from '../src/Core/EstuaryEvents';
 
 @component
 export class ExampleSayLine extends BaseScriptComponent {
 
     // ==================== Configuration (set in Inspector) ====================
-
-    /**
-     * Reference to the SceneObject that has EstuaryVoiceConnection.
-     * The script will find the EstuaryCharacter through it.
-     *
-     * Alternatively, you can set characterObject directly if you're
-     * using EstuaryCharacter without EstuaryVoiceConnection.
-     */
-    @input
-    @hint("SceneObject with EstuaryVoiceConnection script")
-    voiceConnectionObject: SceneObject;
 
     /**
      * Delay in seconds after connection before speaking the first line.
@@ -76,26 +65,49 @@ export class ExampleSayLine extends BaseScriptComponent {
 
     // ==================== Private Members ====================
 
-    private character: EstuaryCharacter | null = null;
     private currentLineIndex: number = 0;
     private connected: boolean = false;
-    private firstLineTimer: number = -1;
 
     // ==================== Lifecycle ====================
 
     onAwake() {
         print("[ExampleSayLine] Initializing...");
+        print(`[ExampleSayLine] Auto-speak on connect: ${this.autoSpeakOnConnect}`);
+        print(`[ExampleSayLine] Delay before first line: ${this.delayBeforeFirstLine}s`);
+        print(`[ExampleSayLine] Scripted lines: ${this.scriptedLines.length}`);
 
-        // Find the character from the voice connection
-        this.character = this.findCharacter();
-        if (!this.character) {
-            print("[ExampleSayLine] ERROR: No EstuaryCharacter found!");
-            print("[ExampleSayLine] Set voiceConnectionObject to your EstuaryVoiceConnection SceneObject");
-            return;
+        // Poll for connection state via EstuaryManager singleton.
+        // This avoids any script execution order issues — we just check
+        // each frame until the manager reports connected.
+        const pollEvent = this.createEvent("UpdateEvent");
+        pollEvent.bind(() => {
+            const manager = EstuaryManager.instance;
+
+            if (!this.connected && manager.isConnected) {
+                this.connected = true;
+                print("[ExampleSayLine] Connection detected!");
+                pollEvent.enabled = false;
+                this.onConnected();
+            }
+        });
+
+        // Also listen for connection state changes in case we miss the initial connect
+        try {
+            const manager = EstuaryManager.instance;
+            manager.on('connectionStateChanged', (state: ConnectionState) => {
+                print(`[ExampleSayLine] Connection state: ${state}`);
+                if (state === ConnectionState.Connected && !this.connected) {
+                    this.connected = true;
+                    pollEvent.enabled = false;
+                    this.onConnected();
+                }
+            });
+        } catch (e) {
+            // Manager may not be initialized yet — the poll loop handles this
+            print(`[ExampleSayLine] Manager not ready yet, using poll fallback`);
         }
 
-        this.setupEventListeners();
-        print(`[ExampleSayLine] Ready with ${this.scriptedLines.length} scripted lines`);
+        print("[ExampleSayLine] Ready — waiting for connection...");
     }
 
     // ==================== Public Methods ====================
@@ -105,7 +117,7 @@ export class ExampleSayLine extends BaseScriptComponent {
      * Wraps around to the first line after reaching the end.
      */
     sayNext(): void {
-        if (!this.character || !this.connected) {
+        if (!this.connected) {
             print("[ExampleSayLine] Cannot say line: not connected");
             return;
         }
@@ -113,7 +125,7 @@ export class ExampleSayLine extends BaseScriptComponent {
         const line = this.scriptedLines[this.currentLineIndex];
         print(`[ExampleSayLine] Speaking line ${this.currentLineIndex + 1}/${this.scriptedLines.length}: "${line}"`);
 
-        this.character.sayLine(line);
+        EstuaryManager.instance.sayLine(line);
 
         this.currentLineIndex = (this.currentLineIndex + 1) % this.scriptedLines.length;
     }
@@ -123,7 +135,7 @@ export class ExampleSayLine extends BaseScriptComponent {
      * Useful for silent narrative text, subtitles, or internal monologue.
      */
     sayTextOnly(): void {
-        if (!this.character || !this.connected) {
+        if (!this.connected) {
             print("[ExampleSayLine] Cannot say line: not connected");
             return;
         }
@@ -131,7 +143,7 @@ export class ExampleSayLine extends BaseScriptComponent {
         const line = "This is a silent scripted line — delivered as text only, no audio.";
         print(`[ExampleSayLine] Sending text-only line: "${line}"`);
 
-        this.character.sayLine(line, true);
+        EstuaryManager.instance.sayLine(line, true);
     }
 
     /**
@@ -140,13 +152,13 @@ export class ExampleSayLine extends BaseScriptComponent {
      * @param textOnly If true, text-only (no TTS audio). Default false.
      */
     say(text: string, textOnly: boolean = false): void {
-        if (!this.character || !this.connected) {
+        if (!this.connected) {
             print("[ExampleSayLine] Cannot say line: not connected");
             return;
         }
 
         print(`[ExampleSayLine] Speaking: "${text}" (textOnly=${textOnly})`);
-        this.character.sayLine(text, textOnly);
+        EstuaryManager.instance.sayLine(text, textOnly);
     }
 
     /**
@@ -159,97 +171,15 @@ export class ExampleSayLine extends BaseScriptComponent {
 
     // ==================== Private Methods ====================
 
-    private findCharacter(): EstuaryCharacter | null {
-        if (!this.voiceConnectionObject) {
-            return null;
-        }
-
-        // Look for EstuaryVoiceConnection script and get its character
-        const scripts = this.voiceConnectionObject.getComponents("Component.ScriptComponent");
-        for (let i = 0; i < scripts.length; i++) {
-            const script = scripts[i] as any;
-            if (typeof script.getCharacter === 'function') {
-                const character = script.getCharacter();
-                if (character) {
-                    return character;
-                }
-            }
-        }
-
-        // The character may not be created yet (connection hasn't happened).
-        // We'll try again when we detect connection via EstuaryManager events.
-        return null;
-    }
-
-    private setupEventListeners(): void {
-        // If character is already available, listen for events
-        if (this.character) {
-            this.subscribeToCharacter(this.character);
-        }
-
-        // Also set up a frame check to find the character if it wasn't ready yet
-        const checkEvent = this.createEvent("UpdateEvent");
-        checkEvent.bind(() => {
-            if (!this.character) {
-                this.character = this.findCharacter();
-                if (this.character) {
-                    print("[ExampleSayLine] Found character (delayed)");
-                    this.subscribeToCharacter(this.character);
-                    checkEvent.enabled = false;
-                }
-            } else if (!this.connected && this.character.isConnected) {
-                // Character connected before we subscribed
-                this.onConnected();
-                checkEvent.enabled = false;
-            } else if (this.connected) {
-                checkEvent.enabled = false;
-            }
-        });
-    }
-
-    private subscribeToCharacter(character: EstuaryCharacter): void {
-        character.on('connected', (session: SessionInfo) => {
-            print(`[ExampleSayLine] Connected! Session: ${session.sessionId}`);
-            this.onConnected();
-        });
-
-        character.on('botResponse', (response: BotResponse) => {
-            if (response.isFinal && response.text) {
-                print(`[ExampleSayLine] Character said: "${response.text}"`);
-            }
-        });
-
-        character.on('voiceReceived', (voice: BotVoice) => {
-            // Audio is handled by EstuaryVoiceConnection's DynamicAudioOutput.
-            // This callback is just for logging/debugging.
-            if (voice.chunkIndex === 0) {
-                print(`[ExampleSayLine] Audio playback started (message: ${voice.messageId})`);
-            }
-        });
-
-        character.on('error', (error: string) => {
-            print(`[ExampleSayLine] Error: ${error}`);
-        });
-
-        // Check if already connected
-        if (character.isConnected) {
-            this.onConnected();
-        }
-    }
-
     private onConnected(): void {
-        if (this.connected) return; // Prevent double-fire
-        this.connected = true;
-
         if (this.autoSpeakOnConnect) {
             print(`[ExampleSayLine] Will speak first line in ${this.delayBeforeFirstLine}s...`);
 
-            // Use a frame-based timer for the delay
-            this.firstLineTimer = 0;
+            let elapsed = 0;
             const delayEvent = this.createEvent("UpdateEvent");
             delayEvent.bind(() => {
-                this.firstLineTimer += getDeltaTime();
-                if (this.firstLineTimer >= this.delayBeforeFirstLine) {
+                elapsed += getDeltaTime();
+                if (elapsed >= this.delayBeforeFirstLine) {
                     delayEvent.enabled = false;
                     this.sayNext();
                 }
