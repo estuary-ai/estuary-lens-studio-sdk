@@ -37,6 +37,8 @@ export interface ImageToCharacterOptions {
     appearancePrompt?: string;
     /** Custom voice description (replaces default, char limit applied automatically) */
     voicePrompt?: string;
+    /** Custom persona/personality description (replaces default, char limit applied automatically) */
+    personaPrompt?: string;
 }
 
 export class EstuaryHttpClient {
@@ -77,6 +79,9 @@ export class EstuaryHttpClient {
         }
         if (options?.voicePrompt) {
             payload.voice_prompt = options.voicePrompt;
+        }
+        if (options?.personaPrompt) {
+            payload.persona_prompt = options.personaPrompt;
         }
         const body = JSON.stringify(payload);
 
