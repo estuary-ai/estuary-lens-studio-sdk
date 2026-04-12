@@ -32,6 +32,13 @@ const SDK_NAMESPACE = '/sdk';
 /** Timeout for Engine.IO handshake before triggering reconnect */
 const ENGINEIO_HANDSHAKE_TIMEOUT_MS = 10000;
 
+/**
+ * Diagnostics flag — set to false to silence all [EstuaryDiag] prints.
+ * Kept as a module-level constant so it can be flipped in one place while
+ * we're investigating voice-chat latency on Spectacles.
+ */
+export const DIAG_ENABLED: boolean = false;
+
 /** Global reference to InternetModule for WebSocket creation */
 let _internetModule: any = null;
 
@@ -143,6 +150,23 @@ export class EstuaryClient extends EventEmitter<any> {
     private _lastSendTime: number = 0;
     private _minSendGapMs: number = 75; // Minimum 75ms gap - Lens Studio WebSocket needs time to flush
     private _maxQueueSize: number = 20; // Drop old audio if queue gets too long
+
+    // ==================== Diagnostics (see DIAG_ENABLED) ====================
+    // Counters and timers used to instrument voice-chat latency on Spectacles.
+    // All reads happen on the hot path so they must stay O(1).
+    private _diagTickCount: number = 0;
+    private _diagLastTickMs: number = 0;
+    private _diagTickIntervalSumMs: number = 0;
+    private _diagTickIntervalSamples: number = 0;
+    private _diagTickIntervalMaxMs: number = 0;
+    private _diagSendCount: number = 0;
+    private _diagAudioSendCount: number = 0;
+    private _diagQueueDepthMax: number = 0;
+    private _diagAudioDropCount: number = 0;
+    private _diagGapBlockedCount: number = 0;
+    private _diagLastStatsPrintMs: number = 0;
+    private _diagBotVoiceCount: number = 0;
+    private _diagLastBotVoiceMs: number = 0;
 
     /**
      * Create a new EstuaryClient.
@@ -421,6 +445,27 @@ export class EstuaryClient extends EventEmitter<any> {
      * This prevents connection timeouts during periods of silence.
      */
     tick(): void {
+        if (DIAG_ENABLED) {
+            const now = Date.now();
+            if (this._diagLastTickMs > 0) {
+                const delta = now - this._diagLastTickMs;
+                this._diagTickIntervalSumMs += delta;
+                this._diagTickIntervalSamples++;
+                if (delta > this._diagTickIntervalMaxMs) {
+                    this._diagTickIntervalMaxMs = delta;
+                }
+            }
+            this._diagLastTickMs = now;
+            this._diagTickCount++;
+            // Print stats roughly once per second to show tick rate, queue depth, drops.
+            if (this._diagLastStatsPrintMs === 0) {
+                this._diagLastStatsPrintMs = now;
+            } else if (now - this._diagLastStatsPrintMs >= 1000) {
+                this.printDiagStats(now);
+                this._diagLastStatsPrintMs = now;
+            }
+        }
+
         // Check Engine.IO handshake timeout
         if (this._handshakeTimeoutStartMs !== null) {
             const elapsed = Date.now() - this._handshakeTimeoutStartMs;
@@ -436,6 +481,28 @@ export class EstuaryClient extends EventEmitter<any> {
             }
         }
         this.processSendQueue();
+    }
+
+    /**
+     * Print diagnostic counters and reset rolling samples. Called from tick()
+     * every ~1s when DIAG_ENABLED.
+     */
+    private printDiagStats(now: number): void {
+        const avgTickMs = this._diagTickIntervalSamples > 0
+            ? (this._diagTickIntervalSumMs / this._diagTickIntervalSamples).toFixed(1)
+            : '-';
+        const depth = this._sendQueue.length;
+        print(
+            `[EstuaryDiag] tick_hz~${this._diagTickIntervalSamples} avg_tick_ms=${avgTickMs} ` +
+            `max_tick_ms=${this._diagTickIntervalMaxMs} queue_now=${depth} queue_max=${this._diagQueueDepthMax} ` +
+            `sends=${this._diagSendCount} audio_sends=${this._diagAudioSendCount} ` +
+            `gap_blocked=${this._diagGapBlockedCount} audio_drops=${this._diagAudioDropCount}`
+        );
+        // Reset rolling samples so each print shows the last ~1s window.
+        this._diagTickIntervalSumMs = 0;
+        this._diagTickIntervalSamples = 0;
+        this._diagTickIntervalMaxMs = 0;
+        this._diagGapBlockedCount = 0;
     }
 
     // ==================== Private Methods ====================
@@ -868,7 +935,7 @@ export class EstuaryClient extends EventEmitter<any> {
             if (jsonStart < 0) return;
 
             const json = message.substring(jsonStart);
-            
+
             // Parse as array: ["eventName", data]
             const parsed = JSON.parse(json);
             if (!Array.isArray(parsed) || parsed.length < 1) return;
@@ -881,6 +948,28 @@ export class EstuaryClient extends EventEmitter<any> {
 
         } catch (e) {
             this.logError(`Failed to parse Socket.IO event: ${e}`);
+            if (DIAG_ENABLED) {
+                // Dump prefix/suffix of the offending message so we can detect
+                // multi-packet coalescing by the Spectacles WebSocket layer.
+                // If we see something like `...}42/sdk,[...` the inbound frames
+                // were concatenated into one onmessage event.
+                const head = message.substring(0, 200);
+                const tail = message.length > 200 ? message.substring(message.length - 120) : '';
+                print(
+                    `[EstuaryDiag] PARSE_FAIL len=${message.length} head="${head}"` +
+                    (tail ? ` tail="${tail}"` : '')
+                );
+                // Scan for a second Socket.IO packet prefix inside the message.
+                // A message like `42/sdk,[...]42/sdk,[...]` means the server sent
+                // multiple events in one tick and Spectacles coalesced them.
+                const secondPrefix = message.indexOf('42/sdk', 3);
+                if (secondPrefix >= 0) {
+                    print(
+                        `[EstuaryDiag] COALESCED_FRAMES second packet starts at ` +
+                        `offset ${secondPrefix} — Spectacles concatenated inbound frames`
+                    );
+                }
+            }
         }
     }
 
@@ -958,6 +1047,24 @@ export class EstuaryClient extends EventEmitter<any> {
         if (!data) {
             this.log('Received empty bot_voice event, ignoring');
             return;
+        }
+
+        if (DIAG_ENABLED) {
+            const now = Date.now();
+            const audioLen = data && data.audio ? String(data.audio).length : 0;
+            const chunkIdx = data && data.chunk_index !== undefined ? data.chunk_index : -1;
+            const isFinal = data && data.is_final ? 1 : 0;
+            // Log every bot_voice for the first 12 (covers first AI turn) then every 10th.
+            if (this._diagBotVoiceCount < 12 || this._diagBotVoiceCount % 10 === 0) {
+                const gap = this._diagLastBotVoiceMs > 0 ? now - this._diagLastBotVoiceMs : 0;
+                print(
+                    `[EstuaryDiag] RX bot_voice #${this._diagBotVoiceCount} ` +
+                    `chunk_idx=${chunkIdx} is_final=${isFinal} b64_len=${audioLen} ` +
+                    `gap_since_prev_ms=${gap}`
+                );
+            }
+            this._diagLastBotVoiceMs = now;
+            this._diagBotVoiceCount++;
         }
 
         try {
@@ -1136,14 +1243,25 @@ export class EstuaryClient extends EventEmitter<any> {
                 for (let i = 0; i < this._sendQueue.length; i++) {
                     if (this._sendQueue[i].includes('stream_audio')) {
                         this._sendQueue.splice(i, 1);
+                        if (DIAG_ENABLED) {
+                            this._diagAudioDropCount++;
+                            print(
+                                `[EstuaryDiag] OVERFLOW dropped oldest audio chunk ` +
+                                `(queue=${this._sendQueue.length}/${this._maxQueueSize}, ` +
+                                `total_drops=${this._diagAudioDropCount})`
+                            );
+                        }
                         break;
                     }
                 }
             }
         }
-        
+
         this._sendQueue.push(cleanMessage);
-        
+        if (DIAG_ENABLED && this._sendQueue.length > this._diagQueueDepthMax) {
+            this._diagQueueDepthMax = this._sendQueue.length;
+        }
+
         // Process queue if not already processing
         this.processSendQueue();
     }
@@ -1158,34 +1276,43 @@ export class EstuaryClient extends EventEmitter<any> {
         if (this._isSending || this._sendQueue.length === 0 || !this._webSocket) {
             return;
         }
-        
+
         // STRICT gap enforcement - Lens Studio WebSocket needs time to flush
         const now = Date.now();
         const timeSinceLastSend = now - this._lastSendTime;
         if (timeSinceLastSend < this._minSendGapMs) {
             // Not enough time passed - wait for next frame
             // Do NOT recurse, do NOT process more messages
+            if (DIAG_ENABLED) {
+                this._diagGapBlockedCount++;
+            }
             return;
         }
-        
+
         this._isSending = true;
         const message = this._sendQueue.shift()!;
-        
+
         // Only log non-audio messages or every 10th audio to reduce log spam
         const isAudio = message.includes('stream_audio');
         if (!isAudio) {
             this.log('Sending (' + message.length + ' chars): ' + message.substring(0, 100) + (message.length > 100 ? '...' : ''));
         }
-        
+
         try {
             this._webSocket.send(message);
             this._lastSendTime = now;
+            if (DIAG_ENABLED) {
+                this._diagSendCount++;
+                if (isAudio) {
+                    this._diagAudioSendCount++;
+                }
+            }
         } catch (e) {
             this.logError('Failed to send message: ' + e);
         }
-        
+
         this._isSending = false;
-        
+
         // Do NOT process next message here!
         // Wait for next frame/call to avoid Lens Studio WebSocket concatenation bug
     }

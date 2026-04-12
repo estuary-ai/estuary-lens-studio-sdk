@@ -68,17 +68,30 @@ export class EstuaryVoiceConnection extends BaseScriptComponent {
     /** Cached credentials reference */
     private credentials: IEstuaryCredentials | null = null;
     
-    /** 
+    /**
      * MicrophoneRecorder from RemoteServiceGateway.lspkg
      * This is the REQUIRED way to capture microphone audio in Lens Studio.
      * Provides event-based audio delivery that works reliably.
-     * 
+     *
      * In Lens Studio: Drag the MicrophoneRecorder SceneObject here,
      * or use the picker to select the SceneObject containing MicrophoneRecorder.
      */
     @input
-    @hint("SceneObject with MicrophoneRecorder script (REQUIRED)")
+    @hint("SceneObject with MicrophoneRecorder script (used when micAudioTrack is NOT set)")
     microphoneRecorderObject: SceneObject;
+
+    /**
+     * OPTIONAL: Direct mic AudioTrackAsset (e.g. EstuaryAudioInput.micaudio).
+     * When set, the SDK bypasses RemoteServiceGateway's MicrophoneRecorder
+     * entirely and drives the MicrophoneAudioProvider itself. This is a
+     * diagnostic path for testing whether the ~22% empty-frame rate we
+     * observed on Spectacles is coming from RSG's wrapper or from the
+     * platform. Leave this unset to use the normal RSG path.
+     */
+    @input
+    @hint("OPTIONAL: direct-mic AudioTrackAsset (bypasses RSG — diagnostic)")
+    @allowUndefined
+    micAudioTrack: AudioTrackAsset;
     
     /** 
      * SceneObject with DynamicAudioOutput script for playing bot voice responses.
@@ -121,15 +134,41 @@ export class EstuaryVoiceConnection extends BaseScriptComponent {
     private audioInitialized: boolean = false;
     
     // ==================== Inactivity Tracking ====================
-    
+
     /** Last activity timestamp (ms) */
     private lastActivityTime: number = 0;
-    
+
     /** Inactivity timeout in ms (10 minutes) */
     private readonly INACTIVITY_TIMEOUT_MS: number = 10 * 60 * 1000;
-    
+
     /** Whether we've already disconnected due to inactivity */
     private disconnectedDueToInactivity: boolean = false;
+
+    // ==================== Tick-Cost Diagnostics ====================
+    /** Rolling sum of total onUpdate execution time (ms). Reset per print window. */
+    private _diagOnUpdateSumMs: number = 0;
+    /** Max single-tick total onUpdate execution time (ms) in current window. */
+    private _diagOnUpdateMaxMs: number = 0;
+    /** Number of onUpdate invocations in current window. */
+    private _diagOnUpdateCount: number = 0;
+    /** Rolling sum of time spent in microphone.pullAudioFrames. */
+    private _diagPullAudioSumMs: number = 0;
+    private _diagPullAudioMaxMs: number = 0;
+    /** Rolling sum of time spent in tick()/processSendQueue. */
+    private _diagTickInnerSumMs: number = 0;
+    private _diagTickInnerMaxMs: number = 0;
+    /** Rolling sum of time spent in the voiceReceived listener (outside the tick). */
+    private _diagBotVoiceSumMs: number = 0;
+    private _diagBotVoiceMaxMs: number = 0;
+    private _diagBotVoiceCount: number = 0;
+    /** Rolling sum of just the Base64.decode step inside the voiceReceived listener. */
+    private _diagB64DecodeSumMs: number = 0;
+    private _diagB64DecodeMaxMs: number = 0;
+    /** Rolling sum of just the addAudioFrame step inside the voiceReceived listener. */
+    private _diagAddFrameSumMs: number = 0;
+    private _diagAddFrameMaxMs: number = 0;
+    /** Last wall-clock time we printed the tick-cost stats line. */
+    private _diagTickCostLastPrintMs: number = 0;
     
     // ==================== Lifecycle ====================
     
@@ -357,19 +396,37 @@ export class EstuaryVoiceConnection extends BaseScriptComponent {
         
         // AI voice response (audio) - play using DynamicAudioOutput
         this.character.on('voiceReceived', (voice: BotVoice) => {
+            const tListenerStart = Date.now();
             // Record activity - voice response received
             this.recordActivity();
-            
+
             if (this.credentials?.debugMode) {
                 this.log(`Voice audio received: ${voice.audio?.length || 0} chars base64, chunk ${voice.chunkIndex}`);
             }
-            
+
             // Play audio using DynamicAudioOutput (hardware-compatible)
             if (this.dynamicAudioOutput && voice.audio && voice.audio.length > 0) {
                 // Decode base64 to PCM16 bytes using native Lens Studio Base64
+                const tDecodeStart = Date.now();
                 const pcmBytes = Base64.decode(voice.audio);
+                const decodeMs = Date.now() - tDecodeStart;
+
+                const tAddStart = Date.now();
                 this.dynamicAudioOutput.addAudioFrame(pcmBytes, 1);
+                const addMs = Date.now() - tAddStart;
+
+                // Rolling stats — a suspiciously-long addMs here is our smoking gun
+                // for the native ring-buffer-back-pressure hypothesis.
+                this._diagB64DecodeSumMs += decodeMs;
+                if (decodeMs > this._diagB64DecodeMaxMs) this._diagB64DecodeMaxMs = decodeMs;
+                this._diagAddFrameSumMs += addMs;
+                if (addMs > this._diagAddFrameMaxMs) this._diagAddFrameMaxMs = addMs;
             }
+
+            const listenerMs = Date.now() - tListenerStart;
+            this._diagBotVoiceSumMs += listenerMs;
+            if (listenerMs > this._diagBotVoiceMaxMs) this._diagBotVoiceMaxMs = listenerMs;
+            this._diagBotVoiceCount++;
         });
         
         // Handle interrupts - stop audio when user starts speaking
@@ -418,7 +475,12 @@ export class EstuaryVoiceConnection extends BaseScriptComponent {
         // listeners are harmless — the old mic has _isRecording=false so handleAudioFrame
         // returns immediately. Only the current mic processes frames.
         if (this.microphone && !this.microphone.isRecording) {
-            if (!this._cachedMicRecorder) {
+            if (this.micAudioTrack) {
+                // Direct-mic diagnostic path — bypass RSG's MicrophoneRecorder
+                print('[EstuaryDiag] Using DIRECT mic path (micAudioTrack is set)');
+                this.microphone.setAudioTrackAsset(this.micAudioTrack);
+                this.character!.microphone = this.microphone;
+            } else if (!this._cachedMicRecorder) {
                 this.discoverMicrophoneRecorder();
                 this._cachedMicRecorder = (this.microphone as any)._microphoneRecorder || null;
             } else {
@@ -456,9 +518,77 @@ export class EstuaryVoiceConnection extends BaseScriptComponent {
             const audioComp = this.dynamicAudioOutputObject.getComponent("Component.AudioComponent");
             if (audioComp) {
                 this.audioComponent = audioComp as AudioComponent;
+
+                // mixToSnap MUST be true for LowLatency playbackMode to actually stick.
+                // Per Spectacles audio docs, LowLatency is silently downgraded to
+                // LowPower if any AudioComponent in the scene has mixToSnap=false.
+                // Set it before the playbackMode so the change is coherent.
+                const mixToSnapBefore = (this.audioComponent as any).mixToSnap;
+                try {
+                    (this.audioComponent as any).mixToSnap = true;
+                } catch (e) {
+                    print('[EstuaryDiag] mixToSnap assignment threw: ' + e);
+                }
+                const mixToSnapAfter = (this.audioComponent as any).mixToSnap;
+                print(
+                    `[EstuaryDiag] PLAYBACK mixToSnap before=${mixToSnapBefore} after=${mixToSnapAfter}`
+                );
+
                 this.audioComponent.playbackMode = Audio.PlaybackMode.LowLatency;
                 this.audioComponent.volume = this._outputVolume;
                 this.log("AudioComponent set to Low Latency mode");
+
+                // ---- DIAGNOSTIC: verify low-latency mode actually stuck ----
+                // Spectacles docs say LowLatency is only honored if ALL audio
+                // components in the scene use mix-to-snap. Any mixToSnap=false
+                // elsewhere silently downgrades playback to LowPower mode,
+                // which "introduces latency in audio playback."
+                try {
+                    const mode = (this.audioComponent as any).playbackMode;
+                    const mixToSnap = (this.audioComponent as any).mixToSnap;
+                    const expected = Audio.PlaybackMode.LowLatency;
+                    print(
+                        `[EstuaryDiag] PLAYBACK playbackMode_after_set=${mode} ` +
+                        `expected=${expected} match=${mode === expected} ` +
+                        `mixToSnap=${mixToSnap}`
+                    );
+                    if (mode !== expected) {
+                        print(
+                            `[EstuaryDiag] ⚠️ playbackMode did NOT stick — Spectacles ` +
+                            `may be ignoring LowLatency request (check other AudioComponents' mixToSnap).`
+                        );
+                    }
+                } catch (e) {
+                    print('[EstuaryDiag] playbackMode readback threw: ' + e);
+                }
+
+                // ---- DIAGNOSTIC: probe AudioOutputProvider preferred frame size ----
+                // RSG's DynamicAudioOutput holds a private audioOutputProvider.
+                // getPreferredFrameSize() returns the buffer size the system
+                // prefers before starting playback. If TTS chunks are much
+                // smaller than this, the player stalls priming its buffer on
+                // every turn — that's perceived as "AI takes forever to start
+                // talking after I finish."
+                try {
+                    const provider = (this.dynamicAudioOutput as any).audioOutputProvider;
+                    if (provider) {
+                        const sampleRate = provider.sampleRate;
+                        let preferred = 'n/a';
+                        if (typeof provider.getPreferredFrameSize === 'function') {
+                            preferred = String(provider.getPreferredFrameSize());
+                        }
+                        print(
+                            `[EstuaryDiag] PLAYBACK provider sampleRate=${sampleRate} ` +
+                            `preferredFrameSize=${preferred}`
+                        );
+                    } else {
+                        print('[EstuaryDiag] PLAYBACK provider introspection unavailable (no .audioOutputProvider field)');
+                    }
+                } catch (e) {
+                    print('[EstuaryDiag] PLAYBACK provider probe threw: ' + e);
+                }
+            } else {
+                print('[EstuaryDiag] ⚠️ No AudioComponent found on dynamicAudioOutputObject — cannot set LowLatency');
             }
         } else {
             print("[EstuaryVoiceConnection] WARNING: Could not find DynamicAudioOutput script on object");
@@ -537,11 +667,76 @@ export class EstuaryVoiceConnection extends BaseScriptComponent {
     // ==================== Update Loop ====================
     
     private onUpdate(): void {
-        // MicrophoneRecorder uses event-based delivery, no per-frame processing needed
-        // DynamicAudioOutput handles audio playback internally via native AudioComponent
-        
+        const tOnUpdateStart = Date.now();
+
+        // MicrophoneRecorder (RSG path) uses event-based delivery, no per-frame pull needed.
+        // DynamicAudioOutput handles audio playback internally via native AudioComponent.
+        // Direct-mic path (when micAudioTrack is set) requires us to pull frames each tick.
+        if (this.microphone && this.micAudioTrack) {
+            const tPull = Date.now();
+            this.microphone.pullAudioFrames();
+            const pullMs = Date.now() - tPull;
+            this._diagPullAudioSumMs += pullMs;
+            if (pullMs > this._diagPullAudioMaxMs) this._diagPullAudioMaxMs = pullMs;
+        }
+
         // Check for inactivity timeout and process send queue
+        const tTick = Date.now();
         this.checkInactivityAndTick();
+        const tickMs = Date.now() - tTick;
+        this._diagTickInnerSumMs += tickMs;
+        if (tickMs > this._diagTickInnerMaxMs) this._diagTickInnerMaxMs = tickMs;
+
+        const onUpdateMs = Date.now() - tOnUpdateStart;
+        this._diagOnUpdateSumMs += onUpdateMs;
+        if (onUpdateMs > this._diagOnUpdateMaxMs) this._diagOnUpdateMaxMs = onUpdateMs;
+        this._diagOnUpdateCount++;
+
+        // Print a breakdown every ~1s so we can see exactly where the budget goes.
+        const now = Date.now();
+        if (this._diagTickCostLastPrintMs === 0) {
+            this._diagTickCostLastPrintMs = now;
+        } else if (now - this._diagTickCostLastPrintMs >= 1000) {
+            this.printTickCostStats();
+            this._diagTickCostLastPrintMs = now;
+        }
+    }
+
+    private printTickCostStats(): void {
+        if (this._diagOnUpdateCount === 0) return;
+        const avgOnUpdate = (this._diagOnUpdateSumMs / this._diagOnUpdateCount).toFixed(1);
+        const avgPull = (this._diagPullAudioSumMs / this._diagOnUpdateCount).toFixed(1);
+        const avgTick = (this._diagTickInnerSumMs / this._diagOnUpdateCount).toFixed(1);
+        const voiceCount = this._diagBotVoiceCount;
+        const avgVoice = voiceCount > 0 ? (this._diagBotVoiceSumMs / voiceCount).toFixed(1) : '-';
+        const avgDecode = voiceCount > 0 ? (this._diagB64DecodeSumMs / voiceCount).toFixed(1) : '-';
+        const avgAdd = voiceCount > 0 ? (this._diagAddFrameSumMs / voiceCount).toFixed(1) : '-';
+
+        print(
+            `[EstuaryDiag] TICKCOST ticks=${this._diagOnUpdateCount} ` +
+            `onUpdate=${avgOnUpdate}ms max=${this._diagOnUpdateMaxMs} ` +
+            `pullAudio=${avgPull}ms max=${this._diagPullAudioMaxMs} ` +
+            `tickInner=${avgTick}ms max=${this._diagTickInnerMaxMs} | ` +
+            `voiceRx=${voiceCount} total=${this._diagBotVoiceSumMs}ms avg=${avgVoice}ms ` +
+            `max=${this._diagBotVoiceMaxMs} decode_avg=${avgDecode}ms decode_max=${this._diagB64DecodeMaxMs} ` +
+            `addFrame_avg=${avgAdd}ms addFrame_max=${this._diagAddFrameMaxMs}`
+        );
+
+        // Reset rolling counters so each print shows the last ~1s window.
+        this._diagOnUpdateSumMs = 0;
+        this._diagOnUpdateMaxMs = 0;
+        this._diagOnUpdateCount = 0;
+        this._diagPullAudioSumMs = 0;
+        this._diagPullAudioMaxMs = 0;
+        this._diagTickInnerSumMs = 0;
+        this._diagTickInnerMaxMs = 0;
+        this._diagBotVoiceSumMs = 0;
+        this._diagBotVoiceMaxMs = 0;
+        this._diagBotVoiceCount = 0;
+        this._diagB64DecodeSumMs = 0;
+        this._diagB64DecodeMaxMs = 0;
+        this._diagAddFrameSumMs = 0;
+        this._diagAddFrameMaxMs = 0;
     }
     
     /**
