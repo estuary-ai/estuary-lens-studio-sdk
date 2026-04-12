@@ -1,0 +1,53 @@
+- !<AssetImportMetadata/8bad338d-e2a6-480c-91c2-18e12ea9ccca>
+  ImportedAssetIds:
+    TypeScriptAsset: !<reference> 7947024e-39cf-4d75-bb5b-7abd5bc619de
+  ImporterName: TypeScriptAssetImporter
+  PrimaryAsset: !<reference> 7947024e-39cf-4d75-bb5b-7abd5bc619de
+  PackageType: NotAPackage
+  LegacyPackagePolicy: ~
+  ExtraData:
+    {}
+  AssetDataMap:
+    TypeScriptAsset: !<own> 2d9bb9a6-e2ec-4e73-8b13-d45c3bf74307
+  DependentFiles:
+    []
+  ImporterSettings: !<AssetImporterSettings>
+    {}
+  CompressionSettings: !<own> 00000000-0000-0000-0000-000000000000
+- !<TypeScriptAssetData/2d9bb9a6-e2ec-4e73-8b13-d45c3bf74307>
+  SvgIcon: ""
+  SetupScript:
+    code: ""
+  Description: ""
+  VersionMajor: 0
+  VersionMinor: 0
+  VersionPatch: 0
+  ComponentUid: 768cac47-c5bb-4acc-afd2-e76a2e39e0d3
+  ExportUid: 00000000-0000-0000-0000-000000000000
+  PackagePolicy: CanBeUnpacked
+  ScriptInputsHidden:
+    autoSendOnConnect: false
+    credentialsObject: false
+    initialMessage: false
+    internetModule: false
+  ScriptTypesHidden:
+    {}
+  ReadMe: !<reference> 00000000-0000-0000-0000-000000000000
+  DeclarationFile: !<reference> 00000000-0000-0000-0000-000000000000
+  Tags:
+    []
+  Attachments:
+    []
+  DefaultScriptInputs:
+    - credentialsObject: !<reference.SceneObject> 00000000-0000-0000-0000-000000000000
+      internetModule: !<reference.InternetModule> 00000000-0000-0000-0000-000000000000
+      autoSendOnConnect: false
+      initialMessage: ""
+  ScriptTypes:
+    -
+      {}
+  InputLines:
+    - '// @input SceneObject credentialsObject {"hint":"SceneObject with EstuaryCredentials script (contains API key & character ID)"}'
+    - '// @input Asset.InternetModule internetModule {"hint":"Connect the InternetModule from your scene"}'
+    - '// @input bool autoSendOnConnect {"hint":"Automatically send initialMessage as a user message on connect"}'
+    - '// @input string initialMessage {"hint":"User message to send on connect (routed through LLM + TTS)"}'

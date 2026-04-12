@@ -1,0 +1,53 @@
+- !<AssetImportMetadata/40714115-40fd-48e9-8b9c-6624253dfd89>
+  ImportedAssetIds:
+    TypeScriptAsset: !<reference> bea481fc-6365-4b94-949b-34d8c2890c0a
+  ImporterName: TypeScriptAssetImporter
+  PrimaryAsset: !<reference> bea481fc-6365-4b94-949b-34d8c2890c0a
+  PackageType: NotAPackage
+  LegacyPackagePolicy: ~
+  ExtraData:
+    {}
+  AssetDataMap:
+    TypeScriptAsset: !<own> 924fc232-5095-48b9-8e12-a3b599bb1a42
+  DependentFiles:
+    []
+  ImporterSettings: !<AssetImporterSettings>
+    {}
+  CompressionSettings: !<own> 00000000-0000-0000-0000-000000000000
+- !<TypeScriptAssetData/924fc232-5095-48b9-8e12-a3b599bb1a42>
+  SvgIcon: ""
+  SetupScript:
+    code: ""
+  Description: ""
+  VersionMajor: 0
+  VersionMinor: 0
+  VersionPatch: 0
+  ComponentUid: 76664a67-6fba-433a-9784-12907182dc74
+  ExportUid: 00000000-0000-0000-0000-000000000000
+  PackagePolicy: CanBeUnpacked
+  ScriptInputsHidden:
+    autoSpeakOnConnect: false
+    delayBeforeFirstLine: false
+    scriptedLines: false
+  ScriptTypesHidden:
+    {}
+  ReadMe: !<reference> 00000000-0000-0000-0000-000000000000
+  DeclarationFile: !<reference> 00000000-0000-0000-0000-000000000000
+  Tags:
+    []
+  Attachments:
+    []
+  DefaultScriptInputs:
+    - delayBeforeFirstLine: !<float> 2.000000
+      autoSpeakOnConnect: true
+      scriptedLines: !<string[]>
+        - "Welcome to my shop, adventurer! I have wares if you have coin."
+        - "That sword you're carrying looks like it's seen better days. I could fix it up for you."
+        - "Come back anytime. I'll keep the forge warm."
+  ScriptTypes:
+    -
+      {}
+  InputLines:
+    - '// @input float delayBeforeFirstLine = 2 {"hint":"Seconds to wait after connection before first line"}'
+    - '// @input bool autoSpeakOnConnect = true {"hint":"Automatically speak the first line when connected"}'
+    - "// @input string[] scriptedLines = {\"Welcome to my shop, adventurer! I have wares if you have coin.\",\"That sword you're carrying looks like it's seen better days. I could fix it up for you.\",\"Come back anytime. I'll keep the forge warm.\"} {\"hint\":\"Lines for the character to say\"}"
