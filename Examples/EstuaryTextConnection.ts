@@ -52,19 +52,19 @@ export class EstuaryTextConnection extends BaseScriptComponent {
     internetModule: InternetModule;
 
     /**
-     * Whether to automatically send a greeting line on connection.
+     * Whether to automatically send the initial message on connection.
      */
     @input
-    @hint("Automatically send the greeting line when connected")
-    autoSpeakOnConnect: boolean = false;
+    @hint("Automatically send initialMessage as a user message on connect")
+    autoSendOnConnect: boolean = false;
 
     /**
-     * Greeting text to send on connection (if autoSpeakOnConnect is true).
-     * Sent as text-only (no TTS audio).
+     * User message to send on connection (if autoSendOnConnect is true).
+     * Routed through the LLM + TTS pipeline like any other user message.
      */
     @input
-    @hint("Greeting text to send on connect (text-only, no audio)")
-    greetingLine: string = "";
+    @hint("User message to send on connect (routed through LLM + TTS)")
+    initialMessage: string = "";
 
     // ==================== Private Members ====================
 
@@ -232,8 +232,8 @@ export class EstuaryTextConnection extends BaseScriptComponent {
         this.character.on('connected', (session: SessionInfo) => {
             this.log(`Connected! Session: ${session.sessionId}`);
 
-            if (this.autoSpeakOnConnect && this.greetingLine.length > 0) {
-                this.character!.sayLine(this.greetingLine, true);
+            if (this.autoSendOnConnect && this.initialMessage.length > 0) {
+                this.character!.sendText(this.initialMessage);
             }
         });
 
