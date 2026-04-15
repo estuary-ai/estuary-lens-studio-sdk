@@ -198,7 +198,7 @@ Handles playback of AI voice responses.
 
 | Property | Description |
 |----------|-------------|
-| `sampleRate` | Playback sample rate (48000) |
+| `sampleRate` | Playback sample rate (24000) |
 | `isPlaying` | Whether audio is playing |
 | `autoInterrupt` | Stop on new audio |
 

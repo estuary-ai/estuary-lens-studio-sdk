@@ -281,6 +281,19 @@ export class EstuaryManager extends EventEmitter<any> {
     }
 
     /**
+     * Send a client-initiated interrupt to cancel the in-progress bot response.
+     * The server will stop generation and emit an `interrupt` event back.
+     * @param messageId Optional message ID to interrupt. Omit to interrupt the current response.
+     */
+    sendClientInterrupt(messageId?: string): void {
+        if (!this._client.isConnected) {
+            return;
+        }
+
+        this._client.sendClientInterrupt(messageId);
+    }
+
+    /**
      * Send a camera image to the server for AI analysis.
      * @param imageBase64 Base64-encoded image data
      * @param mimeType MIME type of the image (e.g., 'image/jpeg')

@@ -33,15 +33,18 @@ default_playback_sample_rate: 24000    # TTS audio generated at 24kHz
 | Feature | Status | Notes |
 |---------|--------|-------|
 | text_chat | Implemented | Full parity |
+| say_line | Implemented | `EstuaryClient.sayLine(text, textOnly?)` emits `say_line` with `text_only` flag |
 | voice_websocket | Implemented | Base64 PCM over WebSocket (only voice option) |
+| voice_push_to_talk | Implemented | PTT semantics available via `startVoiceMode()` / `stopVoiceMode()` — no separate API, client drives the recording window |
 | voice_livekit | Not available | Spectacles lacks WebRTC — voice_websocket is the only path |
-| interrupts | Implemented | Full parity |
+| interrupts | Implemented | `client_interrupt` emitted via `EstuaryCharacter.interrupt()` / `EstuaryManager.sendClientInterrupt()`; inbound `interrupt` parsed with `message_id` / `reason` / `interrupted_at` |
 | audio_playback_tracking | Implemented | Full parity |
 | vision_camera | Implemented | On-demand via CameraModule |
 | video_streaming_livekit | Not available | No WebRTC |
 | video_streaming_websocket | Not implemented | Could be added via `video_frame` event if needed |
 | scene_graph | Not applicable | No AR world model on Spectacles |
 | device_pose | Implemented | Via DeviceTracking |
+| memory_push | Implemented | `memory_updated` event forwarded as `memoryUpdated` on EstuaryClient (raw payload; `new_memories` uses camelCase per contract) |
 | preferences | Not implemented | No update_preferences event or enableVisionAcknowledgment handling |
 | http_client | Implemented | Image-to-character (JSON+base64), model polling, character listing |
 | image_to_character | Implemented | Via JSON+base64 (no multipart/form-data on Spectacles) |

@@ -311,17 +311,25 @@ export class EstuaryCharacter
 
     /**
      * Signal that the current response should be interrupted.
-     * Emits 'interrupt' event - handle audio stopping externally.
+     * Sends `client_interrupt` to the server so generation stops server-side,
+     * then emits a local 'interrupt' event for audio-stop handlers.
      */
     interrupt(): void {
         // Store the current message ID as interrupted so late-arriving audio is filtered
         if (this._currentMessageId) {
             this._interruptedMessageId = this._currentMessageId;
         }
-        
+
+        // Notify server so it halts text/TTS generation for this message.
+        EstuaryManager.instance.sendClientInterrupt(this._interruptedMessageId || undefined);
+
         this._currentPartialResponse = '';
         this._currentMessageId = '';
-        this.emit('interrupt', { messageId: this._interruptedMessageId, reason: 'user_interrupt' });
+        this.emit('interrupt', {
+            messageId: this._interruptedMessageId,
+            reason: 'user_interrupt',
+            interruptedAt: ''
+        });
     }
 
     /**

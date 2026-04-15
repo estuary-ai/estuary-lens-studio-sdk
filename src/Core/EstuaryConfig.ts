@@ -21,7 +21,7 @@ export interface EstuaryConfig {
     /** Sample rate for microphone recording (must be 16000 for STT) */
     recordingSampleRate?: number;
 
-    /** Expected sample rate for voice playback (16000 for Spectacles, 48000 for desktop) */
+    /** Expected sample rate for voice playback in Hz (default 24000 — Snap's recommended Spectacles output rate) */
     playbackSampleRate?: number;
 
     /** Duration of audio chunks to send (in milliseconds) */
