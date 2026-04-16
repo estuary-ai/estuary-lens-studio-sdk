@@ -51,6 +51,7 @@ default_playback_sample_rate: 24000    # TTS audio generated at 24kHz
 | model_polling | Implemented | Exponential backoff 2s-10s |
 | character_listing | Implemented | Paginated GET /api/v1/characters |
 | glb_download | Implemented | downloadAndInstantiateGlb() on EstuaryHttpClient; uses InternetModule + RemoteMediaModule + GltfAsset pipeline |
+| session_rejected | Documented (not implemented) | Event documented in SDK_CONTRACT.md per quick-task 260416-jta (concurrent session cap MVP on share tokens). Gateway emits `session_rejected` with `reason: "concurrent_limit"` then disconnects; Spectacles SDK currently treats this as a generic disconnect. Client handler + user-visible message surfacing deferred until share-token flows go consumer-facing. |
 
 ## Architecture
 
