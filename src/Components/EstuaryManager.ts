@@ -9,13 +9,24 @@
  */
 
 import { EstuaryClient, setInternetModule, getInternetModule } from '../Core/EstuaryClient';
+import { EstuaryHttpClient } from '../Core/EstuaryHttpClient';
 import { EstuaryConfig, validateConfig } from '../Core/EstuaryConfig';
-import { ConnectionState, EventEmitter, CameraCaptureRequest } from '../Core/EstuaryEvents';
+import {
+    ConnectionState,
+    EventEmitter,
+    CameraCaptureRequest,
+    EncounterMessageHandler,
+    EncounterVoiceHandler,
+    EncounterEndHandler,
+} from '../Core/EstuaryEvents';
 import { SessionInfo } from '../Models/SessionInfo';
 import { BotResponse } from '../Models/BotResponse';
 import { BotVoice } from '../Models/BotVoice';
 import { SttResponse } from '../Models/SttResponse';
 import { InterruptData } from '../Models/InterruptData';
+import { EncounterMessage } from '../Models/EncounterMessage';
+import { EncounterVoice } from '../Models/EncounterVoice';
+import { EncounterEnd } from '../Models/EncounterEnd';
 
 /**
  * Singleton manager for the Estuary SDK in Lens Studio.
@@ -26,6 +37,7 @@ export class EstuaryManager extends EventEmitter<any> {
 
     // Private fields
     private _client: EstuaryClient;
+    private _httpClient: EstuaryHttpClient | null = null;
     private _config: EstuaryConfig | null = null;
     private _activeCharacter: IEstuaryCharacterHandler | null = null;
     private _registeredCharacters: Map<string, IEstuaryCharacterHandler> = new Map();
@@ -66,6 +78,10 @@ export class EstuaryManager extends EventEmitter<any> {
         this._config = value;
         if (value) {
             this._client.debugLogging = value.debugLogging ?? false;
+            // Mint a fresh HTTP client whenever the config is replaced so
+            // serverUrl / apiKey / playerId stay in sync. Used by the
+            // Encounter REST helpers (and any future REST methods).
+            this._httpClient = new EstuaryHttpClient(value);
         }
     }
 
@@ -308,6 +324,74 @@ export class EstuaryManager extends EventEmitter<any> {
         }
 
         this._client.sendCameraImage(imageBase64, mimeType, requestId, text, sampleRate);
+    }
+
+    // ==================== Encounter (NEW CONVENTION) ====================
+    //
+    // NEW: Direct EventEmitter forwarders for Encounter (a 2-character
+    // feature, not per-character dispatched).
+    //
+    // Prior features (text_chat, voice_websocket, vision_camera, etc.) wire
+    // inbound events internally and dispatch them through
+    // ``IEstuaryCharacterHandler`` to the active per-character instance
+    // (see ``initialize()`` lines below — ``handleBotResponse`` /
+    // ``handleBotVoice`` etc.). That model fits per-character conversation
+    // events, but Encounter is a 2-character feature with no single "active
+    // character" to dispatch to.
+    //
+    // Therefore Encounter introduces a NEW convention on EstuaryManager:
+    // public ``onEncounterX(handler)`` forwarder methods that subscribe
+    // a user-supplied handler directly to the underlying EstuaryClient
+    // ``EventEmitter``. This is the FIRST feature to expose EventEmitter
+    // subscriptions through EstuaryManager. Document accordingly in
+    // CLAUDE.md Parity Status so future readers understand the divergence.
+
+    /**
+     * Start a stateless 2-character Encounter.
+     *
+     * REST POST /api/encounters. Returns ``{encounterId}`` once the server
+     * has launched the background task. The caller must then invoke
+     * ``subscribeEncounter(encounterId)`` to receive the streamed turns.
+     */
+    startEncounter(req: {
+        characterAId: string;
+        characterBId: string;
+        prompt: string;
+        maxTurns?: number;
+        voice?: boolean;
+        starter?: 'a' | 'b';
+    }): Promise<{ encounterId: string }> {
+        if (!this._httpClient) {
+            return Promise.reject(new Error(
+                'startEncounter: EstuaryManager.config not set — cannot mint HTTP client'
+            ));
+        }
+        return this._httpClient.startEncounter(req);
+    }
+
+    /**
+     * Subscribe the underlying /sdk Socket.IO session to the encounter's
+     * room so that ``encounter_message`` / ``encounter_voice`` /
+     * ``encounter_end`` events flow through. Must be called after
+     * ``startEncounter()`` returns.
+     */
+    subscribeEncounter(encounterId: string): void {
+        this._client.subscribeEncounter(encounterId);
+    }
+
+    /** Subscribe to ``encounter_message`` events. Direct EventEmitter forwarder. */
+    onEncounterMessage(handler: EncounterMessageHandler): void {
+        this._client.on('encounterMessage', handler);
+    }
+
+    /** Subscribe to ``encounter_voice`` events. Direct EventEmitter forwarder. */
+    onEncounterVoice(handler: EncounterVoiceHandler): void {
+        this._client.on('encounterVoice', handler);
+    }
+
+    /** Subscribe to ``encounter_end`` events. Direct EventEmitter forwarder. */
+    onEncounterEnd(handler: EncounterEndHandler): void {
+        this._client.on('encounterEnd', handler);
     }
 
     /**

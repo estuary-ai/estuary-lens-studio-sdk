@@ -259,6 +259,61 @@ export class EstuaryHttpClient {
     }
 
     /**
+     * Start a stateless 2-character Encounter via POST /api/encounters.
+     *
+     * The server runs the conversation in a background task and streams
+     * alternating turns over /sdk Socket.IO. The caller must subscribe
+     * to those events via ``EstuaryClient.subscribeEncounter()`` (or
+     * ``EstuaryManager.subscribeEncounter()``) using the returned
+     * ``encounterId``. See SDK_CONTRACT.md §REST API — Encounter for the
+     * full contract.
+     *
+     * @param req Request body. ``maxTurns`` defaults to 6 client-side and
+     *            is hard-capped at 20 server-side (HTTP 422 if exceeded).
+     * @returns ``{encounterId}``
+     */
+    async startEncounter(req: {
+        characterAId: string;
+        characterBId: string;
+        prompt: string;
+        maxTurns?: number;
+        voice?: boolean;
+        starter?: 'a' | 'b';
+    }): Promise<{ encounterId: string }> {
+        const url = this.getHttpBaseUrl() + '/api/encounters';
+        const body = JSON.stringify({
+            characterAId: req.characterAId,
+            characterBId: req.characterBId,
+            prompt: req.prompt,
+            maxTurns: req.maxTurns ?? 6,
+            voice: req.voice ?? false,
+            starter: req.starter ?? 'a',
+        });
+
+        this.log(
+            `Starting encounter: a=${req.characterAId} b=${req.characterBId} ` +
+            `maxTurns=${req.maxTurns ?? 6} voice=${req.voice ?? false}`
+        );
+
+        const { status, body: responseBody } = await this.fetchJson('POST', url, body);
+
+        if (status >= 200 && status < 300) {
+            const json = JSON.parse(responseBody);
+            const encounterId: string = json.encounterId || json.encounter_id || '';
+            if (!encounterId) {
+                throw new Error('startEncounter: server returned 2xx but no encounterId');
+            }
+            this.log(`Encounter started: ${encounterId}`);
+            return { encounterId };
+        } else {
+            throw new Error(
+                `startEncounter failed (${status}): ` +
+                responseBody.substring(0, 200)
+            );
+        }
+    }
+
+    /**
      * Get a single character by ID.
      * GET /api/v1/characters/{characterId}.
      *

@@ -7,6 +7,9 @@ export * from './InterruptData';
 export * from './AgentResponse';
 export * from './ModelStatusResponse';
 export * from './CharacterListResponse';
+export * from './EncounterMessage';
+export * from './EncounterVoice';
+export * from './EncounterEnd';
 
 
 

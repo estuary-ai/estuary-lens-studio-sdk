@@ -25,6 +25,9 @@ import { BotResponse, parseBotResponse } from '../Models/BotResponse';
 import { BotVoice, parseBotVoice } from '../Models/BotVoice';
 import { SttResponse, parseSttResponse } from '../Models/SttResponse';
 import { InterruptData, parseInterruptData } from '../Models/InterruptData';
+import { parseEncounterMessage } from '../Models/EncounterMessage';
+import { parseEncounterVoice } from '../Models/EncounterVoice';
+import { parseEncounterEnd } from '../Models/EncounterEnd';
 
 /** Socket.IO namespace for SDK connections */
 const SDK_NAMESPACE = '/sdk';
@@ -332,6 +335,29 @@ export class EstuaryClient extends EventEmitter<any> {
         }
         this.emitSocketEvent('client_interrupt', payload);
         this.log(`Sent client_interrupt${messageId ? ` for ${messageId}` : ''}`);
+    }
+
+    /**
+     * Subscribe to streamed events for a previously-started Encounter.
+     * The encounter must have been started via POST /api/encounters
+     * (use ``EstuaryHttpClient.startEncounter`` or
+     * ``EstuaryManager.startEncounter``) — this method only joins the
+     * server-side room. Server emits ``encounter_message`` /
+     * ``encounter_voice`` / ``encounter_end`` to that room. See
+     * SDK_CONTRACT.md §Features > encounter.
+     * @param encounterId UUID returned by POST /api/encounters
+     */
+    subscribeEncounter(encounterId: string): void {
+        if (!this.isConnected) {
+            this.logError('Cannot subscribe to encounter: not connected');
+            return;
+        }
+        if (!encounterId) {
+            this.logError('Cannot subscribe to encounter: encounterId is empty');
+            return;
+        }
+        this.emitSocketEvent('subscribe_encounter', { encounterId });
+        this.log(`Sent subscribe_encounter for ${encounterId}`);
     }
 
     /**
@@ -1036,9 +1062,51 @@ export class EstuaryClient extends EventEmitter<any> {
             case 'memory_updated':
                 this.handleMemoryUpdated(data);
                 break;
+            case 'encounter_message':
+                this.handleEncounterMessage(data);
+                break;
+            case 'encounter_voice':
+                this.handleEncounterVoice(data);
+                break;
+            case 'encounter_end':
+                this.handleEncounterEnd(data);
+                break;
             default:
                 this.log(`Unhandled event: ${eventName}`);
         }
+    }
+
+    private handleEncounterMessage(data: any): void {
+        const msg = parseEncounterMessage(data);
+        if (!msg) {
+            this.log('Received malformed encounter_message, ignoring');
+            return;
+        }
+        this.log(`Encounter message: speaker=${msg.speaker} turn=${msg.turnIndex} len=${msg.text.length}`);
+        // Raw-string emit matches the existing `'botResponse'` / `'botVoice'`
+        // convention at this same call site (see handleBotResponse /
+        // handleBotVoice). EstuaryEvents.ts intentionally exports type
+        // aliases, NOT name constants.
+        this.emit('encounterMessage', msg);
+    }
+
+    private handleEncounterVoice(data: any): void {
+        const voice = parseEncounterVoice(data);
+        if (!voice) {
+            this.log('Received malformed encounter_voice, ignoring');
+            return;
+        }
+        this.emit('encounterVoice', voice);
+    }
+
+    private handleEncounterEnd(data: any): void {
+        const end = parseEncounterEnd(data);
+        if (!end) {
+            this.log('Received malformed encounter_end, ignoring');
+            return;
+        }
+        this.log(`Encounter end: reason=${end.reason} turns=${end.turnsEmitted}`);
+        this.emit('encounterEnd', end);
     }
 
     private handleMemoryUpdated(data: any): void {

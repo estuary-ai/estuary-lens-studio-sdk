@@ -30,6 +30,9 @@ export * from './Models/InterruptData';
 export * from './Models/AgentResponse';
 export * from './Models/ModelStatusResponse';
 export * from './Models/CharacterListResponse';
+export * from './Models/EncounterMessage';
+export * from './Models/EncounterVoice';
+export * from './Models/EncounterEnd';
 
 // Utility exports
 export * from './Utilities/AudioConverter';

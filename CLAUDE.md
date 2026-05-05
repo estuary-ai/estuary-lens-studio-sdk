@@ -52,6 +52,7 @@ default_playback_sample_rate: 24000    # TTS audio generated at 24kHz
 | character_listing | Implemented | Paginated GET /api/v1/characters |
 | glb_download | Implemented | downloadAndInstantiateGlb() on EstuaryHttpClient; uses InternetModule + RemoteMediaModule + GltfAsset pipeline |
 | session_rejected | Documented (not implemented) | Event documented in SDK_CONTRACT.md per quick-task 260416-jta (concurrent session cap MVP on share tokens). Gateway emits `session_rejected` with `reason: "concurrent_limit"` then disconnects; Spectacles SDK currently treats this as a generic disconnect. Client handler + user-visible message surfacing deferred until share-token flows go consumer-facing. |
+| encounter | Implemented | `EstuaryManager.startEncounter()` (REST) + `subscribeEncounter()` + `onEncounterMessage` / `onEncounterVoice` / `onEncounterEnd`; voice playback requires consumer to wire two `DynamicAudioOutput` instances (one per speaker) — see SDK_CONTRACT.md §Features > encounter. Inworld characters fall back to default ElevenLabs voice for MVP. NOTE: introduces a new convention — direct `EventEmitter` forwarders on `EstuaryManager` (prior features dispatch through `IEstuaryCharacterHandler`). |
 
 ## Architecture
 
