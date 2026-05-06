@@ -1,0 +1,71 @@
+- !<AssetImportMetadata/b05097ea-84b2-49d2-933f-075ee0ba205f>
+  ImportedAssetIds:
+    TypeScriptAsset: !<reference> f7ef39a9-afa2-420f-8ee8-b431273e74a9
+  ImporterName: TypeScriptAssetImporter
+  PrimaryAsset: !<reference> f7ef39a9-afa2-420f-8ee8-b431273e74a9
+  PackageType: NotAPackage
+  LegacyPackagePolicy: ~
+  ExtraData:
+    {}
+  AssetDataMap:
+    TypeScriptAsset: !<own> 958cfd85-b440-4d8c-ae61-fee6ab512370
+  DependentFiles:
+    []
+  ImporterSettings: !<AssetImporterSettings>
+    {}
+  CompressionSettings: !<own> 00000000-0000-0000-0000-000000000000
+- !<TypeScriptAssetData/958cfd85-b440-4d8c-ae61-fee6ab512370>
+  SvgIcon: ""
+  SetupScript:
+    code: ""
+  Description: ""
+  VersionMajor: 0
+  VersionMinor: 0
+  VersionPatch: 0
+  ComponentUid: 489aad58-dad4-4cef-96ff-be723b14d79e
+  ExportUid: 00000000-0000-0000-0000-000000000000
+  PackagePolicy: CanBeUnpacked
+  ScriptInputsHidden:
+    audioOutputAObject: false
+    audioOutputBObject: false
+    autoStart: false
+    characterAId: false
+    characterBId: false
+    debugLogging: false
+    maxTurns: false
+    prompt: false
+    textComponent: false
+    voice: false
+  ScriptTypesHidden:
+    {}
+  ReadMe: !<reference> 00000000-0000-0000-0000-000000000000
+  DeclarationFile: !<reference> 00000000-0000-0000-0000-000000000000
+  Tags:
+    []
+  Attachments:
+    []
+  DefaultScriptInputs:
+    - characterAId: ""
+      characterBId: ""
+      prompt: Argue about whether pineapple belongs on pizza.
+      maxTurns: !<float> 6.000000
+      voice: false
+      textComponent: !<reference.Text> 00000000-0000-0000-0000-000000000000
+      audioOutputAObject: !<reference.SceneObject> 00000000-0000-0000-0000-000000000000
+      audioOutputBObject: !<reference.SceneObject> 00000000-0000-0000-0000-000000000000
+      autoStart: true
+      debugLogging: false
+  ScriptTypes:
+    -
+      {}
+  InputLines:
+    - '// @input string characterAId {"hint":"Owned character A UUID — must satisfy Agent.user_id == api_key_user_id"}'
+    - '// @input string characterBId {"hint":"Owned character B UUID — must satisfy Agent.user_id == api_key_user_id"}'
+    - '// @input string prompt = "Argue about whether pineapple belongs on pizza." {"hint":"Topic / scene prompt fed to both characters (1..2000 chars).", "widget":"text_area"}'
+    - '// @input float maxTurns = 6 {"hint":"Max turns (one message per turn). Server hard-caps at 20."}'
+    - '// @input bool voice {"hint":"If true, server synthesizes TTS via ElevenLabs and emits encounter_voice events."}'
+    - '// @input Component.Text textComponent {"hint":"Optional Text component to render messages as they arrive"}'
+    - '// @input SceneObject audioOutputAObject {"hint":"DynamicAudioOutput SceneObject for speaker A (RemoteServiceGateway.lspkg) — required if voice=true"}'
+    - '// @input SceneObject audioOutputBObject {"hint":"DynamicAudioOutput SceneObject for speaker B (RemoteServiceGateway.lspkg) — required if voice=true"}'
+    - '// @input bool autoStart = true {"hint":"Auto-start on awake (otherwise call EncounterDemo.start() from another script)"}'
+    - '// @input bool debugLogging {"hint":"Enable debug logging"}'
