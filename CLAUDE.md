@@ -33,7 +33,7 @@ default_playback_sample_rate: 24000    # TTS audio generated at 24kHz
 | Feature | Status | Notes |
 |---------|--------|-------|
 | text_chat | Implemented | Full parity |
-| say_line | Implemented | `EstuaryClient.sayLine(text, textOnly?)` emits `say_line` with `text_only` flag |
+| say_line | Implemented | REQUIRED (contract v1.0, promoted from OPTIONAL 2026-06-06). `EstuaryClient.sayLine(text, textOnly?)` emits `say_line` with `text_only` flag |
 | voice_websocket | Implemented | Base64 PCM over WebSocket (only voice option) |
 | voice_push_to_talk | Implemented | PTT semantics available via `startVoiceMode()` / `stopVoiceMode()` — no separate API, client drives the recording window |
 | voice_livekit | Not available | Spectacles lacks WebRTC — voice_websocket is the only path |
@@ -53,6 +53,8 @@ default_playback_sample_rate: 24000    # TTS audio generated at 24kHz
 | glb_download | Implemented | downloadAndInstantiateGlb() on EstuaryHttpClient; uses InternetModule + RemoteMediaModule + GltfAsset pipeline |
 | session_rejected | Documented (not implemented) | Event documented in SDK_CONTRACT.md per quick-task 260416-jta (concurrent session cap MVP on share tokens). Gateway emits `session_rejected` with `reason: "concurrent_limit"` then disconnects; Spectacles SDK currently treats this as a generic disconnect. Client handler + user-visible message surfacing deferred until share-token flows go consumer-facing. |
 | encounter | Implemented | `EstuaryManager.startEncounter()` (REST) + `subscribeEncounter()` + `onEncounterMessage` / `onEncounterVoice` / `onEncounterEnd`; voice playback requires consumer to wire two `DynamicAudioOutput` instances (one per speaker) — see SDK_CONTRACT.md §Features > encounter. Inworld characters fall back to default ElevenLabs voice for MVP. NOTE: introduces a new convention — direct `EventEmitter` forwarders on `EstuaryManager` (prior features dispatch through `IEstuaryCharacterHandler`). |
+| body_animation_stream | Not implemented | Backend wire is 63-bone MHR LOCAL quats (`bot_pose`, `session_info` body.rig `"mhr63"`, 2026-07-02; SMPL-X 52-bone wire retired). No Spectacles body-rig consumer exists, and 30 fps × 63-bone JSON frames are heavy for the Spectacles WebSocket budget (see Platform Quirks: send queue). The Unreal SDK is the only body-animation consumer. |
+| bind_pose | Retired | Server event deleted 2026-07-02 (MHR63 rig-native model needs no client bind). Never implemented here — do not add. |
 
 ## Architecture
 
