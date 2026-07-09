@@ -285,6 +285,29 @@ export class EstuaryCharacter
     }
 
     /**
+     * Handle a server voice-idle release (voice_timeout).
+     * After VOICE_IDLE_TIMEOUT_S without user speech the server closed the
+     * STT stream but KEPT the socket — text chat continues. Stop the mic and
+     * clear the voice-active flag locally so audio stops streaming into the
+     * closed stream; deliberately does NOT emit stop_voice (the server-side
+     * voice session is already gone). Resume = startVoiceSession() on user
+     * intent — recommended UX is the auto-mute illusion (show the mic muted,
+     * restart voice on unmute).
+     */
+    handleVoiceTimeout(data: any): void {
+        this._isVoiceSessionActive = false;
+
+        print(`[EstuaryCharacter] Voice released by server after inactivity — mic stopped, socket stays connected`);
+
+        // Stop microphone if available
+        if (this._microphone) {
+            this._microphone.stopRecording();
+        }
+
+        this.emit('voiceTimeout', data);
+    }
+
+    /**
      * Stream audio data for speech-to-text.
      * @param audioBase64 Base64-encoded audio data
      */

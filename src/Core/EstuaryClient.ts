@@ -1056,6 +1056,9 @@ export class EstuaryClient extends EventEmitter<any> {
             case 'session_timeout':
                 this.handleSessionTimeout(data);
                 break;
+            case 'voice_timeout':
+                this.handleVoiceTimeout(data);
+                break;
             case 'camera_capture':
                 this.handleCameraCaptureRequest(data);
                 break;
@@ -1243,6 +1246,22 @@ export class EstuaryClient extends EventEmitter<any> {
         this._serverEndedSession = true;
 
         this.emit('sessionTimeout', data);
+    }
+
+    private handleVoiceTimeout(data: any): void {
+        const idleSeconds = data?.idle_seconds ?? '?';
+        const timeoutSeconds = data?.timeout_seconds ?? '?';
+        this.log(
+            `Server released voice after ${idleSeconds}s without speech ` +
+            `(timeout ${timeoutSeconds}s) — socket stays connected, text continues`
+        );
+
+        // Unlike session_timeout, NO disconnect follows: the server closed the
+        // STT stream but KEPT the socket. Deliberately do NOT touch
+        // _serverEndedSession — wiring voice_timeout into reconnect suppression
+        // would break the next legitimate reconnect (see SDK_CONTRACT.md).
+        // Resume = start_voice on user intent (auto-mute illusion UX).
+        this.emit('voiceTimeout', data);
     }
 
     private handleCameraCaptureRequest(data: any): void {
