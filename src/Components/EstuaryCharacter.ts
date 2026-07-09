@@ -59,6 +59,14 @@ export class EstuaryCharacter
     /** Automatically reconnect if connection is lost */
     private _autoReconnect: boolean = true;
 
+    /**
+     * Set by session_timeout: the server ended the session on purpose (idle
+     * reap), so the disconnect that follows must NOT trigger _autoReconnect —
+     * reconnecting would re-establish billed backend resources with nobody
+     * talking, in a loop. Cleared on the next explicit connect().
+     */
+    private _serverEndedSession: boolean = false;
+
     // ==================== State ====================
 
     /** Whether this character is currently connected */
@@ -187,6 +195,9 @@ export class EstuaryCharacter
         if (!this._playerId) {
             this._playerId = this.generatePlayerId();
         }
+
+        // Explicit user intent overrides a prior server idle timeout
+        this._serverEndedSession = false;
 
         // Make this the active character and connect
         EstuaryManager.instance.setActiveCharacter(this);
@@ -383,11 +394,33 @@ export class EstuaryCharacter
 
         this.emit('disconnected');
 
-        // Auto-reconnect if enabled
-        if (this._autoReconnect && reason !== 'client disconnect') {
+        // Auto-reconnect if enabled — but NEVER after a server idle reap
+        // (session_timeout): that would re-authenticate and re-establish
+        // billed backend resources in a loop. Resume = explicit connect().
+        if (this._autoReconnect && !this._serverEndedSession && reason !== 'client disconnect') {
             print(`[EstuaryCharacter] Auto-reconnecting...`);
             this.connect();
         }
+    }
+
+    /**
+     * Handle a server idle reap (session_timeout). The server emits this and
+     * then disconnects the socket — flag the session as server-ended so the
+     * disconnect that follows skips auto-reconnect. Resume = explicit
+     * connect() on user intent (see SDK_CONTRACT.md).
+     */
+    handleSessionTimeout(data: any): void {
+        this._serverEndedSession = true;
+        this._isVoiceSessionActive = false;
+
+        print(`[EstuaryCharacter] Session ended by server for inactivity — will not auto-reconnect`);
+
+        // Stop microphone if available
+        if (this._microphone) {
+            this._microphone.stopRecording();
+        }
+
+        this.emit('sessionTimeout', data);
     }
 
     handleBotResponse(response: BotResponse): void {

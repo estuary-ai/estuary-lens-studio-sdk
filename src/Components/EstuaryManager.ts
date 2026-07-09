@@ -434,6 +434,7 @@ export class EstuaryManager extends EventEmitter<any> {
         this._client.on('sttResponse', (response: SttResponse) => this.handleSttResponse(response));
         this._client.on('interrupt', (data: InterruptData) => this.handleInterrupt(data));
         this._client.on('voiceTimeout', (data: any) => this.handleVoiceTimeout(data));
+        this._client.on('sessionTimeout', (data: any) => this.handleSessionTimeout(data));
         this._client.on('error', (error: string) => this.handleError(error));
         this._client.on('connectionStateChanged', (state: ConnectionState) => this.handleConnectionStateChanged(state));
         this._client.on('cameraCaptureRequest', (request: CameraCaptureRequest) => this.handleCameraCaptureRequest(request));
@@ -504,6 +505,14 @@ export class EstuaryManager extends EventEmitter<any> {
         }
     }
 
+    private handleSessionTimeout(data: any): void {
+        this.log(`Session ended by server (session_timeout) — disconnect follows, no auto-reconnect`);
+        this.emit('sessionTimeout', data);
+        if (this._activeCharacter && this._activeCharacter.handleSessionTimeout) {
+            this._activeCharacter.handleSessionTimeout(data);
+        }
+    }
+
     private handleError(error: string): void {
         this.logError(`Error: ${error}`);
         this.emit('error', error);
@@ -561,6 +570,15 @@ export interface IEstuaryCharacterHandler {
      * with existing custom handlers.
      */
     handleVoiceTimeout?(data: any): void;
+    /**
+     * Optional: server ended the session for inactivity (session_timeout);
+     * a disconnect follows immediately. Implementations must flag the close
+     * as server-intended so their own reconnect logic stays quiet — an
+     * auto-reconnect here re-establishes billed resources in a loop.
+     * Resume = explicit connect() on user intent. Optional for backward
+     * compatibility with existing custom handlers.
+     */
+    handleSessionTimeout?(data: any): void;
     handleError(error: string): void;
     handleConnectionStateChanged(state: ConnectionState): void;
     handleCameraCaptureRequest(request: CameraCaptureRequest): void;

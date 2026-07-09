@@ -144,6 +144,18 @@ export class EstuaryVoiceConnection extends BaseScriptComponent {
     /** Whether we've already disconnected due to inactivity */
     private disconnectedDueToInactivity: boolean = false;
 
+    /**
+     * Voice released by the server (voice_timeout) while the socket stayed
+     * connected — the auto-mute illusion state. Resume via tap or unmute.
+     */
+    private voiceSuspended: boolean = false;
+
+    /**
+     * Session ended by the server (session_timeout) — disconnected, and
+     * deliberately NOT auto-reconnected. Resume via tap or reconnect().
+     */
+    private sessionEnded: boolean = false;
+
     // ==================== Tick-Cost Diagnostics ====================
     /** Rolling sum of total onUpdate execution time (ms). Reset per print window. */
     private _diagOnUpdateSumMs: number = 0;
@@ -205,6 +217,19 @@ export class EstuaryVoiceConnection extends BaseScriptComponent {
         // Set up the update loop for audio processing
         this.updateEvent = this.createEvent("UpdateEvent");
         this.updateEvent.bind(() => this.onUpdate());
+
+        // Tap to resume after a server reap — user intent is the resume
+        // signal per SDK_CONTRACT.md. voice_timeout → fresh voice session;
+        // session_timeout → explicit reconnect. (Editor preview: click the
+        // Preview panel.)
+        const tapEvent = this.createEvent("TapEvent");
+        tapEvent.bind(() => {
+            if (this.sessionEnded) {
+                this.reconnect();
+            } else if (this.voiceSuspended) {
+                this.resumeVoice();
+            }
+        });
         
         // Connect immediately — credentials and modules are already resolved
         this.connect();
@@ -362,6 +387,8 @@ export class EstuaryVoiceConnection extends BaseScriptComponent {
             // Initialize activity tracking
             this.recordActivity();
             this.disconnectedDueToInactivity = false;
+            this.voiceSuspended = false;
+            this.sessionEnded = false;
             
             // Discover hardware components now — by the time the WebSocket
             // handshake completes, all package scripts will have initialised.
@@ -383,6 +410,24 @@ export class EstuaryVoiceConnection extends BaseScriptComponent {
             if (this.microphone) {
                 this.microphone.stopRecording();
             }
+        });
+
+        // Server released voice after inactivity (voice_timeout) — the SDK
+        // already stopped the mic and cleared voice state; the socket (and
+        // text chat) stay live. Present it as an auto-muted mic.
+        this.character.on('voiceTimeout', (data: any) => {
+            this.voiceSuspended = true;
+            const idle = data?.idle_seconds ?? '?';
+            print(`[EstuaryVoiceConnection] 🎙️ Voice auto-muted by server after ${idle}s without speech — tap (or unmute) to resume; text still works`);
+        });
+
+        // Server ended the whole session for inactivity (session_timeout) —
+        // a disconnect follows, and no SDK layer will auto-reconnect (that
+        // would re-establish billed resources in a loop). Resume on intent.
+        this.character.on('sessionTimeout', (data: any) => {
+            this.sessionEnded = true;
+            const idle = data?.idle_seconds ?? '?';
+            print(`[EstuaryVoiceConnection] ⏱️ Session ended by server after ${idle}s of inactivity — tap (or call reconnect()) to resume`);
         });
         
         // AI response (text)
@@ -832,6 +877,13 @@ export class EstuaryVoiceConnection extends BaseScriptComponent {
 
     /** Toggle mute state. Returns true if now muted, false if now unmuted. */
     toggleMute(): boolean {
+        // Unmuting after a server voice release (voice_timeout) must start a
+        // FRESH voice session — just restarting the mic would stream audio
+        // into a closed STT stream (the auto-mute illusion's unmute path).
+        if (this.voiceSuspended) {
+            this.resumeVoice();
+            return this.isMuted;
+        }
         if (this.microphone) {
             this.microphone.toggleRecording();
             const muted = !this.microphone.isRecording;
@@ -843,12 +895,52 @@ export class EstuaryVoiceConnection extends BaseScriptComponent {
 
     /** Set mute state explicitly */
     setMuted(muted: boolean): void {
+        if (!muted && this.voiceSuspended) {
+            // Unmute after a server voice release = start a fresh voice session
+            this.resumeVoice();
+            return;
+        }
         if (!this.microphone) return;
         if (muted && this.microphone.isRecording) {
             this.microphone.stopRecording();
         } else if (!muted && !this.microphone.isRecording) {
             this.microphone.startRecording();
         }
+    }
+
+    /**
+     * Resume voice after a server voice_timeout. Starts a fresh voice
+     * session (the gateway restarts STT on demand) and the mic with it.
+     */
+    resumeVoice(): void {
+        if (!this.character?.isConnected) {
+            print("[EstuaryVoiceConnection] Cannot resume voice: not connected — use reconnect()");
+            return;
+        }
+        this.voiceSuspended = false;
+        this.recordActivity();
+        this.character.startVoiceSession();
+        print("[EstuaryVoiceConnection] 🎙️ Voice resumed after server release");
+    }
+
+    /**
+     * Explicitly reconnect after a server session_timeout (or any other
+     * disconnect). This is the user-intent resume path — nothing reconnects
+     * automatically after an idle reap.
+     */
+    reconnect(): void {
+        if (this.character?.isConnected) {
+            this.log("reconnect() ignored: already connected");
+            return;
+        }
+        print("[EstuaryVoiceConnection] Reconnecting on user intent...");
+        this.sessionEnded = false;
+        this.voiceSuspended = false;
+        this.recordActivity();
+        // Fresh character/mic instances; the 'connected' handler restarts
+        // voice + mic streaming (same path as switchCharacter)
+        this.disconnect();
+        this.connect();
     }
 
     // ==================== Utility ====================
