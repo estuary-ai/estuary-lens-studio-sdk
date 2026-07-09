@@ -134,6 +134,9 @@ export class EstuaryClient extends EventEmitter<any> {
     private _webSocket: any = null; // Lens Studio WebSocket
     private _reconnectAttempts: number = 0;
     private _disposed: boolean = false;
+    // Set by session_timeout: suppresses autoReconnect for the
+    // server-initiated close that immediately follows it.
+    private _serverEndedSession: boolean = false;
     private _namespace: string = SDK_NAMESPACE;
     private _auth: AuthenticateData | null = null;
     private _connectStartMs: number | null = null;
@@ -253,6 +256,7 @@ export class EstuaryClient extends EventEmitter<any> {
             return;
         }
 
+        this._serverEndedSession = false;  // explicit user intent overrides a prior idle timeout
         this.connectInternal();
     }
 
@@ -866,10 +870,12 @@ export class EstuaryClient extends EventEmitter<any> {
         this._currentSession = null;
         this.emit('disconnected', 'connection closed');
 
-        // Attempt reconnect
-        if (this._config.autoReconnect) {
+        // Attempt reconnect — unless the server ended the session on purpose
+        // (idle-session timeout; see handleSessionTimeout).
+        if (this._config.autoReconnect && !this._serverEndedSession) {
             this.handleReconnect();
         }
+        this._serverEndedSession = false;
     }
 
     private handleWebSocketError(error: string): void {
@@ -1047,6 +1053,12 @@ export class EstuaryClient extends EventEmitter<any> {
             case 'quota_exceeded':
                 this.handleQuotaExceeded(data);
                 break;
+            case 'session_timeout':
+                this.handleSessionTimeout(data);
+                break;
+            case 'voice_timeout':
+                this.handleVoiceTimeout(data);
+                break;
             case 'camera_capture':
                 this.handleCameraCaptureRequest(data);
                 break;
@@ -1215,6 +1227,41 @@ export class EstuaryClient extends EventEmitter<any> {
     private handleQuotaExceeded(data: any): void {
         const message = data?.message || 'API quota exceeded';
         this.logError(`Quota exceeded: ${message}`);
+    }
+
+    private handleSessionTimeout(data: any): void {
+        const idleSeconds = data?.idle_seconds ?? '?';
+        const timeoutSeconds = data?.timeout_seconds ?? '?';
+        this.log(
+            `Server ended session for inactivity (idle ${idleSeconds}s, ` +
+            `timeout ${timeoutSeconds}s) — will not auto-reconnect`
+        );
+
+        // The server closes this socket right after session_timeout and tears
+        // down the session's billed resources (Deepgram stream, LiveKit room).
+        // Auto-reconnecting would re-authenticate and re-establish them with
+        // nobody talking, in a loop — flag the close as intentional so
+        // handleWebSocketClose skips autoReconnect. Resuming requires an
+        // explicit connect() driven by user intent (see SDK_CONTRACT.md).
+        this._serverEndedSession = true;
+
+        this.emit('sessionTimeout', data);
+    }
+
+    private handleVoiceTimeout(data: any): void {
+        const idleSeconds = data?.idle_seconds ?? '?';
+        const timeoutSeconds = data?.timeout_seconds ?? '?';
+        this.log(
+            `Server released voice after ${idleSeconds}s without speech ` +
+            `(timeout ${timeoutSeconds}s) — socket stays connected, text continues`
+        );
+
+        // Unlike session_timeout, NO disconnect follows: the server closed the
+        // STT stream but KEPT the socket. Deliberately do NOT touch
+        // _serverEndedSession — wiring voice_timeout into reconnect suppression
+        // would break the next legitimate reconnect (see SDK_CONTRACT.md).
+        // Resume = start_voice on user intent (auto-mute illusion UX).
+        this.emit('voiceTimeout', data);
     }
 
     private handleCameraCaptureRequest(data: any): void {
