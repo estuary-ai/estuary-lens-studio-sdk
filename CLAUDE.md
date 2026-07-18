@@ -57,6 +57,8 @@ default_playback_sample_rate: 24000    # TTS audio generated at 24kHz
 | encounter | Implemented | `EstuaryManager.startEncounter()` (REST) + `subscribeEncounter()` + `onEncounterMessage` / `onEncounterVoice` / `onEncounterEnd`; voice playback requires consumer to wire two `DynamicAudioOutput` instances (one per speaker) — see SDK_CONTRACT.md §Features > encounter. Inworld characters fall back to default ElevenLabs voice for MVP. NOTE: introduces a new convention — direct `EventEmitter` forwarders on `EstuaryManager` (prior features dispatch through `IEstuaryCharacterHandler`). |
 | body_animation_stream | Not implemented | Backend wire is 63-bone MHR LOCAL quats (`bot_pose`, `session_info` body.rig `"mhr63"`, 2026-07-02; SMPL-X 52-bone wire retired). No Spectacles body-rig consumer exists, and 30 fps × 63-bone JSON frames are heavy for the Spectacles WebSocket budget (see Platform Quirks: send queue). The Unreal SDK is the only body-animation consumer. |
 | bind_pose | Retired | Server event deleted 2026-07-02 (MHR63 rig-native model needs no client bind). Never implemented here — do not add. |
+| turn_metrics | Not implemented | OPTIONAL/debug event; latency gizmo is web-frontend only. |
+| simulation_v1 | Not implemented | Public Simulation API (SDK_CONTRACT.md §REST API — Simulation (v1), contract v1.4–1.5): worlds/instances REST + `/sim-v1` live streaming + per-instance world-view document. Unity is the reference SDK implementation (2026-07-18). Feasible on Spectacles (InternetModule REST + the existing Socket.IO client can join another namespace) but deferred — no Spectacles use case yet; server-to-server orchestration usually owns world/instance management, with the glasses as a viewer at most. |
 
 ## Architecture
 
