@@ -45,6 +45,7 @@ default_playback_sample_rate: 24000    # TTS audio generated at 24kHz
 | scene_graph | Not applicable | No AR world model on Spectacles |
 | device_pose | Implemented | Via DeviceTracking |
 | memory_push | Implemented | `memory_updated` event forwarded as `memoryUpdated` on EstuaryClient (raw payload; `new_memories` uses camelCase per contract) |
+| motive_push (v1.7) | Not implemented | `motive_updated` (snake_case, precedes `memory_updated`) is additive/OPTIONAL; no Spectacles use case yet — the private motive is owner/director-facing, not player-facing. Add a `motiveUpdated` forward next to `memoryUpdated` if a lens ever needs it. Character motive REST (`/api/v1/characters/{id}/motive`) and simulation motives are likewise unwrapped (no simulation surface in this SDK). |
 | preferences | Not implemented | No update_preferences event or enableVisionAcknowledgment handling |
 | http_client | Implemented | Image-to-character (JSON+base64), model polling, character listing |
 | image_to_character | Implemented | Via JSON+base64 (no multipart/form-data on Spectacles) |
