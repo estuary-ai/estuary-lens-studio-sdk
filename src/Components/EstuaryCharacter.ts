@@ -18,6 +18,7 @@ import { BotResponse } from '../Models/BotResponse';
 import { BotVoice } from '../Models/BotVoice';
 import { SttResponse } from '../Models/SttResponse';
 import { InterruptData } from '../Models/InterruptData';
+import { ClientActionEvent } from '../Models/ClientAction';
 
 /**
  * Event types for EstuaryCharacter
@@ -26,6 +27,7 @@ export interface EstuaryCharacterEvents {
     connected: (sessionInfo: SessionInfo) => void;
     disconnected: () => void;
     botResponse: (response: BotResponse) => void;
+    clientAction: (action: ClientActionEvent) => void;
     voiceReceived: (voice: BotVoice) => void;
     transcript: (response: SttResponse) => void;
     interrupt: (data: InterruptData) => void;
@@ -441,6 +443,14 @@ export class EstuaryCharacter
         }
 
         this.emit('botResponse', response);
+    }
+
+    handleClientAction(action: ClientActionEvent): void {
+        // Typed in-world action call (client_action, contract v1.9).
+        // Re-emit for listeners — EstuaryActionManager subscribes here and
+        // dispatches through the same actionTriggered / action:{name} events
+        // as the legacy XML tag path.
+        this.emit('clientAction', action);
     }
 
     handleBotVoice(voice: BotVoice): void {

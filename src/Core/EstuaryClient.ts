@@ -28,6 +28,7 @@ import { InterruptData, parseInterruptData } from '../Models/InterruptData';
 import { parseEncounterMessage } from '../Models/EncounterMessage';
 import { parseEncounterVoice } from '../Models/EncounterVoice';
 import { parseEncounterEnd } from '../Models/EncounterEnd';
+import { parseClientAction } from '../Models/ClientAction';
 
 /** Socket.IO namespace for SDK connections */
 const SDK_NAMESPACE = '/sdk';
@@ -1083,6 +1084,9 @@ export class EstuaryClient extends EventEmitter<any> {
             case 'encounter_end':
                 this.handleEncounterEnd(data);
                 break;
+            case 'client_action':
+                this.handleClientAction(data);
+                break;
             default:
                 this.log(`Unhandled event: ${eventName}`);
         }
@@ -1119,6 +1123,18 @@ export class EstuaryClient extends EventEmitter<any> {
         }
         this.log(`Encounter end: reason=${end.reason} turns=${end.turnsEmitted}`);
         this.emit('encounterEnd', end);
+    }
+
+    private handleClientAction(data: any): void {
+        const action = parseClientAction(data);
+        if (!action) {
+            this.log('Received malformed client_action, ignoring');
+            return;
+        }
+        this.log(`Client action: ${action.name} (message ${action.messageId})`);
+        // Raw-string emit matches the existing `'botResponse'` / `'botVoice'`
+        // convention at this same call site.
+        this.emit('clientAction', action);
     }
 
     private handleMemoryUpdated(data: any): void {

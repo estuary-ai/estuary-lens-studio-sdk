@@ -38,6 +38,7 @@ default_playback_sample_rate: 24000    # TTS audio generated at 24kHz
 | voice_push_to_talk | Implemented | PTT semantics available via `startVoiceMode()` / `stopVoiceMode()` — no separate API, client drives the recording window |
 | voice_livekit | Not available | Spectacles lacks WebRTC — voice_websocket is the only path |
 | interrupts | Implemented | `client_interrupt` emitted via `EstuaryCharacter.interrupt()` / `EstuaryManager.sendClientInterrupt()`; inbound `interrupt` parsed with `message_id` / `reason` / `interrupted_at` |
+| client_action | Implemented | Typed in-world action calls (SCRUM-202, contract v1.9), fire-on-arrival per contract (not synced to TTS playback). Forwarding: `EstuaryClient` parses `client_action` → `clientAction` → `EstuaryManager` → `IEstuaryCharacterHandler.handleClientAction?` (optional, backward compatible) → `EstuaryCharacter` re-emits `clientAction` → `EstuaryActionManager` runs the SAME strictMode filter + dispatch as the tag path, so the existing `actionTriggered` / `action:{name}` / `actionsParsed` callbacks fire unchanged — integrators see no API change. `ParsedAction` gains additive optional `params` (argument values stringified to match legacy XML attribute behavior); for typed events `tag` holds a synthesized name-only `<action name="..." />`. This makes parameterized actions work on Spectacles for the FIRST time — the legacy regex only matched name-only tags. The legacy XML tag parser is retained but dormant during the deprecation window (fires only on stray tags still in `bot_response.text`); remove in a follow-up release per SDK_CONTRACT.md migration notes. |
 | audio_playback_tracking | Implemented | Full parity |
 | vision_camera | Implemented | On-demand via CameraModule |
 | video_streaming_livekit | Not available | No WebRTC |
@@ -70,7 +71,7 @@ src/
 │   ├── EstuaryCharacter         — Per-character instance, EventEmitter pattern
 │   ├── EstuaryMicrophone        — Audio capture with chunking
 │   ├── EstuaryCredentials       — API key + character config
-│   └── EstuaryActionManager     — Parses action tags from bot responses
+│   └── EstuaryActionManager     — Dispatches typed client_action events (+ dormant legacy tag parser)
 ├── Core/                    # Low-level client logic
 │   ├── EstuaryClient            — Socket.IO v4 client (manual protocol impl)
 │   ├── EstuaryHttpClient        — REST API client (image-to-character, model polling, characters)

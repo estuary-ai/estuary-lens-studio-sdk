@@ -1,7 +1,9 @@
 /**
  * Action Manager component for Estuary SDK in Lens Studio.
- * Parses action tags from bot responses and tracks triggered actions.
- * 
+ * Dispatches character actions from typed client_action events (contract
+ * v1.9) and tracks triggered actions. Also retains the legacy dormant
+ * parser for XML action tags in bot response text.
+ *
  * Usage:
  * 1. Create an instance: const actionManager = new EstuaryActionManager(character);
  * 2. Subscribe to events: actionManager.on('actionTriggered', (action) => { ... });
@@ -11,6 +13,7 @@
 import { EstuaryCharacter } from './EstuaryCharacter';
 import { EstuaryCredentials, IEstuaryCredentials, getCredentialsFromSceneObject } from './EstuaryCredentials';
 import { BotResponse } from '../Models/BotResponse';
+import { ClientActionEvent } from '../Models/ClientAction';
 import { EventEmitter } from '../Core/EstuaryEvents';
 
 /**
@@ -38,24 +41,41 @@ export interface RegisteredAction {
 }
 
 /**
- * Represents a parsed action from bot response text
+ * Represents a triggered character action.
+ * Sourced from a typed client_action event (contract v1.9) or, on the
+ * legacy dormant path, parsed from an XML tag in bot response text.
  */
 export interface ParsedAction {
     /** The action name (e.g., "sit", "wave", "dance") */
     name: string;
-    /** The full original tag text */
+    /**
+     * The full original tag text (legacy XML path). For actions sourced
+     * from typed client_action events, a synthesized name-only equivalent
+     * (e.g. '<action name="sit" />') — parameters are NOT included in the
+     * tag; read them from `params`.
+     */
     tag: string;
     /** The message ID this action came from */
     messageId: string;
     /** Timestamp when action was detected */
     timestamp: number;
+    /**
+     * Action parameters (client_action-sourced actions only). Values are
+     * stringified to match legacy XML attribute behavior (numbers via
+     * String(), booleans as "true"/"false"). Undefined for actions parsed
+     * from legacy XML tags (the legacy parser only matched name-only tags).
+     */
+    params?: { [param: string]: string };
 }
 
 /**
- * EstuaryActionManager - Parses and tracks actions from bot responses.
- * 
- * Monitors bot responses for action tags like <action name="sit" /> and
- * emits events when actions are detected. Also tracks the current/last action.
+ * EstuaryActionManager - Dispatches and tracks character actions.
+ *
+ * Listens for typed client_action events from the character (contract v1.9)
+ * and emits events when actions arrive. Also monitors bot responses for
+ * legacy XML action tags like <action name="sit" /> (dormant path — the
+ * backend no longer instructs models to emit tags, but stray tags may still
+ * appear during the deprecation window). Tracks the current/last action.
  */
 export class EstuaryActionManager extends EventEmitter<any> {
     
@@ -78,7 +98,12 @@ export class EstuaryActionManager extends EventEmitter<any> {
     /** Maximum number of actions to keep in history */
     private _maxHistorySize: number = 100;
     
-    /** Regex pattern to match action tags: <action name="..." /> */
+    /**
+     * Regex pattern to match legacy XML action tags: <action name="..." />
+     * Dormant since contract v1.9 (actions arrive as typed client_action
+     * events) — kept so stray tags a model still emits keep working during
+     * the deprecation window. Name-only: parameterized tags never matched.
+     */
     private readonly _actionTagRegex: RegExp = /<action\s+name\s*=\s*["']([^"']+)["']\s*\/?>/gi;
     
     /** Registered actions per character ID */
@@ -97,6 +122,9 @@ export class EstuaryActionManager extends EventEmitter<any> {
     
     /** Handler function for botResponse events (stored for cleanup) */
     private _botResponseHandler: ((response: BotResponse) => void) | null = null;
+
+    /** Handler function for clientAction events (stored for cleanup) */
+    private _clientActionHandler: ((action: ClientActionEvent) => void) | null = null;
     
     // ==================== Constructor ====================
     
@@ -431,16 +459,22 @@ export class EstuaryActionManager extends EventEmitter<any> {
             return;
         }
         
-        // Create and store handler function
+        // Create and store handler functions
         this._botResponseHandler = (response: BotResponse) => {
             this.handleBotResponse(response);
         };
-        
-        // Subscribe to botResponse events
+        this._clientActionHandler = (action: ClientActionEvent) => {
+            this.handleClientAction(action);
+        };
+
+        // Subscribe to botResponse events (legacy dormant XML tag path)
         this._targetCharacter.on('botResponse', this._botResponseHandler);
-        
+
+        // Subscribe to typed client_action events (contract v1.9)
+        this._targetCharacter.on('clientAction', this._clientActionHandler);
+
         this._isListening = true;
-        this.log('Started listening to bot responses');
+        this.log('Started listening to bot responses and client actions');
     }
     
     /**
@@ -455,9 +489,14 @@ export class EstuaryActionManager extends EventEmitter<any> {
             this._targetCharacter.off('botResponse', this._botResponseHandler);
             this._botResponseHandler = null;
         }
-        
+
+        if (this._targetCharacter && this._clientActionHandler) {
+            this._targetCharacter.off('clientAction', this._clientActionHandler);
+            this._clientActionHandler = null;
+        }
+
         this._isListening = false;
-        this.log('Stopped listening to bot responses');
+        this.log('Stopped listening to bot responses and client actions');
     }
     
     /**
@@ -571,6 +610,63 @@ export class EstuaryActionManager extends EventEmitter<any> {
         }
     }
     
+    /**
+     * Handle a typed client_action event (contract v1.9).
+     * Fire-on-arrival: the server delivers exactly one event per action call,
+     * already validated against the character's declared parameters. Runs
+     * through the same strictMode filter and dispatch as the legacy tag path
+     * so actionTriggered / action:{name} / actionsParsed behavior is
+     * unchanged for integrators.
+     */
+    private handleClientAction(event: ClientActionEvent): void {
+        const actionName = event.name ? event.name.trim() : '';
+        if (actionName.length === 0) {
+            return;
+        }
+
+        // Stringify argument values to match legacy XML attribute behavior
+        // (numbers via String(), booleans as "true"/"false").
+        const params: { [param: string]: string } = {};
+        for (const key in event.arguments) {
+            params[key] = String(event.arguments[key]);
+        }
+
+        const action: ParsedAction = {
+            name: actionName,
+            // Synthesized name-only legacy tag equivalent — parameters live
+            // in `params` (the legacy regex never matched parameterized tags).
+            tag: `<action name="${actionName}" />`,
+            messageId: event.messageId || '',
+            timestamp: Date.now(),
+            params: params
+        };
+
+        this.log(`Client action received: ${action.name}`);
+
+        // Check if action should be triggered (same strictMode filter as the tag path)
+        if (!this.shouldTriggerAction(action.name)) {
+            this.log(`Action '${action.name}' not registered, skipping (strict mode)`);
+            return;
+        }
+
+        // Update current action
+        this._currentAction = action;
+
+        // Add to history
+        this._actionHistory.push(action);
+
+        // Trim history if needed
+        if (this._actionHistory.length > this._maxHistorySize) {
+            this._actionHistory = this._actionHistory.slice(-this._maxHistorySize);
+        }
+
+        // Dispatch to all event systems
+        this.dispatchAction(action);
+
+        // Emit batch event to keep parity with the legacy tag path
+        this.emit('actionsParsed', [action]);
+    }
+
     /**
      * Check if an action should be triggered based on registration and strict mode.
      */

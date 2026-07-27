@@ -10,6 +10,7 @@ export * from './CharacterListResponse';
 export * from './EncounterMessage';
 export * from './EncounterVoice';
 export * from './EncounterEnd';
+export * from './ClientAction';
 
 
 

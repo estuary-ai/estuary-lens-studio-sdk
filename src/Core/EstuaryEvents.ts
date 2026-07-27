@@ -10,6 +10,7 @@ import { InterruptData } from '../Models/InterruptData';
 import { EncounterMessage } from '../Models/EncounterMessage';
 import { EncounterVoice } from '../Models/EncounterVoice';
 import { EncounterEnd } from '../Models/EncounterEnd';
+import { ClientActionEvent } from '../Models/ClientAction';
 
 /**
  * Connection states for the Estuary client.
@@ -45,6 +46,7 @@ export type ConnectionStateHandler = (state: ConnectionState) => void;
 export type EncounterMessageHandler = (msg: EncounterMessage) => void;
 export type EncounterVoiceHandler = (voice: EncounterVoice) => void;
 export type EncounterEndHandler = (end: EncounterEnd) => void;
+export type ClientActionHandler = (action: ClientActionEvent) => void;
 
 /**
  * Camera capture request from the server.
@@ -145,6 +147,7 @@ export interface EstuaryClientEvents {
     encounterMessage: EncounterMessageHandler;
     encounterVoice: EncounterVoiceHandler;
     encounterEnd: EncounterEndHandler;
+    clientAction: ClientActionHandler;
 }
 
 

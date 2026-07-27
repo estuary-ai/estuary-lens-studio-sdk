@@ -33,6 +33,7 @@ export * from './Models/CharacterListResponse';
 export * from './Models/EncounterMessage';
 export * from './Models/EncounterVoice';
 export * from './Models/EncounterEnd';
+export * from './Models/ClientAction';
 
 // Utility exports
 export * from './Utilities/AudioConverter';

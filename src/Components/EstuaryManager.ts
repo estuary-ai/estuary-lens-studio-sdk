@@ -27,6 +27,7 @@ import { InterruptData } from '../Models/InterruptData';
 import { EncounterMessage } from '../Models/EncounterMessage';
 import { EncounterVoice } from '../Models/EncounterVoice';
 import { EncounterEnd } from '../Models/EncounterEnd';
+import { ClientActionEvent } from '../Models/ClientAction';
 
 /**
  * Singleton manager for the Estuary SDK in Lens Studio.
@@ -431,6 +432,7 @@ export class EstuaryManager extends EventEmitter<any> {
         this._client.on('disconnected', (reason: string) => this.handleDisconnected(reason));
         this._client.on('botResponse', (response: BotResponse) => this.handleBotResponse(response));
         this._client.on('botVoice', (voice: BotVoice) => this.handleBotVoice(voice));
+        this._client.on('clientAction', (action: ClientActionEvent) => this.handleClientAction(action));
         this._client.on('sttResponse', (response: SttResponse) => this.handleSttResponse(response));
         this._client.on('interrupt', (data: InterruptData) => this.handleInterrupt(data));
         this._client.on('voiceTimeout', (data: any) => this.handleVoiceTimeout(data));
@@ -480,6 +482,13 @@ export class EstuaryManager extends EventEmitter<any> {
         this.log(`Bot voice received: chunk ${voice.chunkIndex}`);
         if (this._activeCharacter) {
             this._activeCharacter.handleBotVoice(voice);
+        }
+    }
+
+    private handleClientAction(action: ClientActionEvent): void {
+        this.log(`Client action received: ${action.name}`);
+        if (this._activeCharacter && this._activeCharacter.handleClientAction) {
+            this._activeCharacter.handleClientAction(action);
         }
     }
 
@@ -560,6 +569,13 @@ export interface IEstuaryCharacterHandler {
     handleDisconnected(reason: string): void;
     handleBotResponse(response: BotResponse): void;
     handleBotVoice(voice: BotVoice): void;
+    /**
+     * Optional: typed in-world action call from the server (client_action,
+     * contract v1.9). Replaces the legacy inline XML <action> tags that rode
+     * inside bot_response.text. Optional for backward compatibility with
+     * existing custom handlers.
+     */
+    handleClientAction?(action: ClientActionEvent): void;
     handleSttResponse(response: SttResponse): void;
     handleInterrupt(data: InterruptData): void;
     /**
