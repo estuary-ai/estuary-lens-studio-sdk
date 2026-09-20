@@ -1,6 +1,6 @@
 /**
  * Response from the model status polling endpoint.
- * Matches GET /api/generate/{agentId}/model-status response.
+ * Matches GET /api/v1/characters/{agentId}/model response.
  */
 export interface ModelStatusResponse {
     /** Current model generation status */

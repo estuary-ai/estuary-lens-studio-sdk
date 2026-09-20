@@ -31,6 +31,13 @@ import { CharacterListResponse, parseCharacterListResponse } from '../Models/Cha
  *
  * Uses the global fetch() API. Requires Lens Studio 5.3+ / Spectacles OS 5.58+.
  */
+/**
+ * SDK version, sent to the gateway as `X-Estuary-Client: estuary-lens-studio-sdk/<version>`.
+ * This is the single source of truth: Lens Studio has no package manifest with a version
+ * (package.native's version fields are zeroed), so set it to the release tag when tagging.
+ */
+export const ESTUARY_SDK_VERSION = '0.4.0';
+
 /** Optional parameters for image-to-character generation. */
 export interface ImageToCharacterOptions {
     /** Custom appearance description (replaces default, char limit applied automatically) */
@@ -61,7 +68,9 @@ export class EstuaryHttpClient {
 
     /**
      * Upload a base64-encoded image to create a new character.
-     * POST /api/generate/image-to-character with Content-Type: application/json.
+     * POST /api/v1/characters/from-image with Content-Type: application/json.
+     * Body fields are camelCase (the route rejects unknown fields). Returns 201 with the
+     * v1 CharacterResponse shape, which parseAgentResponse already maps.
      *
      * @param imageBase64 Base64-encoded image data (no data URI prefix)
      * @param mimeType MIME type of the image (e.g., "image/jpeg", "image/png")
@@ -69,19 +78,19 @@ export class EstuaryHttpClient {
      * @returns The created AgentResponse
      */
     async uploadImageToCharacter(imageBase64: string, mimeType: string, options?: ImageToCharacterOptions): Promise<AgentResponse> {
-        const url = this.getHttpBaseUrl() + '/api/generate/image-to-character';
+        const url = this.getHttpBaseUrl() + '/api/v1/characters/from-image';
         const payload: Record<string, string> = {
             image: imageBase64,
-            mime_type: mimeType,
+            mimeType: mimeType,
         };
         if (options?.appearancePrompt) {
-            payload.appearance_prompt = options.appearancePrompt;
+            payload.appearancePrompt = options.appearancePrompt;
         }
         if (options?.voicePrompt) {
-            payload.voice_prompt = options.voicePrompt;
+            payload.voicePrompt = options.voicePrompt;
         }
         if (options?.personaPrompt) {
-            payload.persona_prompt = options.personaPrompt;
+            payload.personaPrompt = options.personaPrompt;
         }
         const body = JSON.stringify(payload);
 
@@ -101,13 +110,13 @@ export class EstuaryHttpClient {
 
     /**
      * Get the current model generation status for an agent.
-     * GET /api/generate/{agentId}/model-status.
+     * GET /api/v1/characters/{agentId}/model.
      *
      * @param agentId Agent UUID to check
      * @returns The ModelStatusResponse
      */
     async getModelStatus(agentId: string): Promise<ModelStatusResponse> {
-        const url = this.getHttpBaseUrl() + '/api/generate/' + agentId + '/model-status';
+        const url = this.getHttpBaseUrl() + '/api/v1/characters/' + agentId + '/model';
 
         const { status, body: responseBody } = await this.fetchJson('GET', url);
 
@@ -121,7 +130,7 @@ export class EstuaryHttpClient {
 
     /**
      * Trigger 3D model generation for an existing agent.
-     * POST /api/generate/{agentId}/generate-model.
+     * POST /api/v1/characters/{agentId}/model. Returns 202 {characterId, modelStatus, rigged}.
      *
      * Also serves as retry when previous generation failed.
      * Throws on 409 if generation already in progress.
@@ -130,7 +139,7 @@ export class EstuaryHttpClient {
      * @returns The initial ModelStatusResponse with modelStatus "generating"
      */
     async generateModel(agentId: string): Promise<ModelStatusResponse> {
-        const url = this.getHttpBaseUrl() + '/api/generate/' + agentId + '/generate-model';
+        const url = this.getHttpBaseUrl() + '/api/v1/characters/' + agentId + '/model';
         const body = JSON.stringify({});
 
         this.log(`Triggering model generation for agent ${agentId}`);
@@ -259,7 +268,7 @@ export class EstuaryHttpClient {
     }
 
     /**
-     * Start a stateless 2-character Encounter via POST /api/encounters.
+     * Start a stateless 2-character Encounter via POST /api/v1/encounters.
      *
      * The server runs the conversation in a background task and streams
      * alternating turns over /sdk Socket.IO. The caller must subscribe
@@ -280,7 +289,7 @@ export class EstuaryHttpClient {
         voice?: boolean;
         starter?: 'a' | 'b';
     }): Promise<{ encounterId: string }> {
-        const url = this.getHttpBaseUrl() + '/api/encounters';
+        const url = this.getHttpBaseUrl() + '/api/v1/encounters';
         const body = JSON.stringify({
             characterAId: req.characterAId,
             characterBId: req.characterBId,
@@ -481,6 +490,8 @@ export class EstuaryHttpClient {
                 // Skip ngrok free-tier browser interstitial
                 request.setHeader('ngrok-skip-browser-warning', 'true');
                 request.setHeader('User-Agent', 'EstuarySDK/1.0');
+                // Identifies this SDK and version to the gateway (REST only, never on the WebSocket)
+                request.setHeader('X-Estuary-Client', 'estuary-lens-studio-sdk/' + ESTUARY_SDK_VERSION);
 
                 if (body) {
                     request.body = body;

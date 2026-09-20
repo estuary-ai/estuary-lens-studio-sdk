@@ -350,7 +350,7 @@ export class EstuaryManager extends EventEmitter<any> {
     /**
      * Start a stateless 2-character Encounter.
      *
-     * REST POST /api/encounters. Returns ``{encounterId}`` once the server
+     * REST POST /api/v1/encounters. Returns ``{encounterId}`` once the server
      * has launched the background task. The caller must then invoke
      * ``subscribeEncounter(encounterId)`` to receive the streamed turns.
      */
