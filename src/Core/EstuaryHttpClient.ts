@@ -38,7 +38,7 @@ import { CharacterListResponse, parseCharacterListResponse } from '../Models/Cha
  * This is the single source of truth: Lens Studio has no package manifest with a version
  * (package.native's version fields are zeroed), so set it to the release tag when tagging.
  */
-export const ESTUARY_SDK_VERSION = '0.4.0';
+export const ESTUARY_SDK_VERSION = '0.5.0';
 
 /** Optional parameters for image-to-character generation. */
 export interface ImageToCharacterOptions {
