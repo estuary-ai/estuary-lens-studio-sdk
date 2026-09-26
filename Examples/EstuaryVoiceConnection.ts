@@ -39,7 +39,6 @@ import { EstuaryManager } from '../src/Components/EstuaryManager';
 import { EstuaryConfig } from '../src/Core/EstuaryConfig';
 import { SessionInfo } from '../src/Models/SessionInfo';
 import { BotResponse } from '../src/Models/BotResponse';
-import { BotVoice } from '../src/Models/BotVoice';
 import { SttResponse } from '../src/Models/SttResponse';
 
 /**
@@ -120,6 +119,11 @@ export class EstuaryVoiceConnection extends BaseScriptComponent {
      * Mic input remains 16kHz (hardware-locked).
      */
     audioSampleRate: number = 24000;
+
+    /** Enable periodic timing reports when profiling on device. */
+    @input
+    @hint("Print audio and update-loop timing once per second")
+    showPerformanceDiagnostics: boolean = false;
 
     
     // ==================== Private Members ====================
@@ -212,11 +216,9 @@ export class EstuaryVoiceConnection extends BaseScriptComponent {
         // Get player ID from credentials (supports manual, persistent, or session-based IDs)
         if (this.credentials.userId && this.credentials.userId.length > 0) {
             this.playerId = this.credentials.userId;
-            this.log(`Using User ID from credentials: ${this.playerId}`);
         } else {
             // Fallback to generated ID if credentials don't provide one
             this.playerId = "spectacles_" + Date.now().toString(36);
-            this.log(`Using fallback generated User ID: ${this.playerId}`);
         }
         
         // Set up the update loop for audio processing
@@ -444,14 +446,10 @@ export class EstuaryVoiceConnection extends BaseScriptComponent {
         });
         
         // AI voice response (audio) - play using DynamicAudioOutput
-        this.character.on('voiceReceived', (voice: BotVoice) => {
+        this.character.on('voiceReceived', () => {
             const tListenerStart = Date.now();
             // Record activity - voice response received
             this.recordActivity();
-
-            if (this.credentials?.debugMode) {
-                this.log(`Voice audio received: ${voice.audio?.length || 0} chars base64, chunk ${voice.chunkIndex}`);
-            }
 
             // EstuaryPlaybackTracker owns playback and scoped interruption.
             const listenerMs = Date.now() - tListenerStart;
@@ -528,7 +526,6 @@ export class EstuaryVoiceConnection extends BaseScriptComponent {
         if (this.microphone && !this.microphone.isRecording) {
             if (this.micAudioTrack) {
                 // Direct-mic diagnostic path — bypass RSG's MicrophoneRecorder
-                print('[EstuaryDiag] Using DIRECT mic path (micAudioTrack is set)');
                 this.microphone.setAudioTrackAsset(this.micAudioTrack);
                 this.character!.microphone = this.microphone;
             } else if (!this._cachedMicRecorder) {
@@ -574,16 +571,11 @@ export class EstuaryVoiceConnection extends BaseScriptComponent {
                 // Per Spectacles audio docs, LowLatency is silently downgraded to
                 // LowPower if any AudioComponent in the scene has mixToSnap=false.
                 // Set it before the playbackMode so the change is coherent.
-                const mixToSnapBefore = (this.audioComponent as any).mixToSnap;
                 try {
                     (this.audioComponent as any).mixToSnap = true;
                 } catch (e) {
                     print('[EstuaryDiag] mixToSnap assignment threw: ' + e);
                 }
-                const mixToSnapAfter = (this.audioComponent as any).mixToSnap;
-                print(
-                    `[EstuaryDiag] PLAYBACK mixToSnap before=${mixToSnapBefore} after=${mixToSnapAfter}`
-                );
 
                 this.audioComponent.playbackMode = Audio.PlaybackMode.LowLatency;
                 this.audioComponent.volume = this._outputVolume;
@@ -596,13 +588,7 @@ export class EstuaryVoiceConnection extends BaseScriptComponent {
                 // which "introduces latency in audio playback."
                 try {
                     const mode = (this.audioComponent as any).playbackMode;
-                    const mixToSnap = (this.audioComponent as any).mixToSnap;
                     const expected = Audio.PlaybackMode.LowLatency;
-                    print(
-                        `[EstuaryDiag] PLAYBACK playbackMode_after_set=${mode} ` +
-                        `expected=${expected} match=${mode === expected} ` +
-                        `mixToSnap=${mixToSnap}`
-                    );
                     if (mode !== expected) {
                         print(
                             `[EstuaryDiag] ⚠️ playbackMode did NOT stick — Spectacles ` +
@@ -613,31 +599,6 @@ export class EstuaryVoiceConnection extends BaseScriptComponent {
                     print('[EstuaryDiag] playbackMode readback threw: ' + e);
                 }
 
-                // ---- DIAGNOSTIC: probe AudioOutputProvider preferred frame size ----
-                // RSG's DynamicAudioOutput holds a private audioOutputProvider.
-                // getPreferredFrameSize() returns the buffer size the system
-                // prefers before starting playback. If TTS chunks are much
-                // smaller than this, the player stalls priming its buffer on
-                // every turn — that's perceived as "AI takes forever to start
-                // talking after I finish."
-                try {
-                    const provider = (this.dynamicAudioOutput as any).audioOutputProvider;
-                    if (provider) {
-                        const sampleRate = provider.sampleRate;
-                        let preferred = 'n/a';
-                        if (typeof provider.getPreferredFrameSize === 'function') {
-                            preferred = String(provider.getPreferredFrameSize());
-                        }
-                        print(
-                            `[EstuaryDiag] PLAYBACK provider sampleRate=${sampleRate} ` +
-                            `preferredFrameSize=${preferred}`
-                        );
-                    } else {
-                        print('[EstuaryDiag] PLAYBACK provider introspection unavailable (no .audioOutputProvider field)');
-                    }
-                } catch (e) {
-                    print('[EstuaryDiag] PLAYBACK provider probe threw: ' + e);
-                }
             } else {
                 print('[EstuaryDiag] ⚠️ No AudioComponent found on dynamicAudioOutputObject — cannot set LowLatency');
             }
@@ -655,13 +616,10 @@ export class EstuaryVoiceConnection extends BaseScriptComponent {
             return;
         }
         
-        this.log('Searching for MicrophoneRecorder...');
-        
         const sceneObj = this.microphoneRecorderObject;
         let micRecorder: MicrophoneRecorder | null = null;
         
         const scripts = sceneObj.getComponents("Component.ScriptComponent") as any[];
-        this.log(`Found ${scripts.length} ScriptComponent(s) on object`);
         
         for (let i = 0; i < scripts.length; i++) {
             const scriptComp = scripts[i] as any;
@@ -669,40 +627,20 @@ export class EstuaryVoiceConnection extends BaseScriptComponent {
             
             // Check if this script has onAudioFrame (MicrophoneRecorder signature)
             if (scriptComp.onAudioFrame && typeof scriptComp.startRecording === 'function') {
-                this.log('Found MicrophoneRecorder directly on script component');
                 micRecorder = scriptComp as MicrophoneRecorder;
                 break;
             }
             
             // Check .api property (deprecated but may still work)
             if (scriptComp.api && scriptComp.api.onAudioFrame) {
-                this.log('Found MicrophoneRecorder via .api property');
                 micRecorder = scriptComp.api as MicrophoneRecorder;
                 break;
-            }
-            
-            // Log ALL available properties on detection failure for debugging
-            if (this.credentials?.debugMode) {
-                const props: string[] = [];
-                for (const key in scriptComp) {
-                    props.push(key);
-                }
-                this.log(`Script ${i} properties (${props.length}): ${props.join(', ')}`);
-                // Also log .api sub-properties if present
-                if (scriptComp.api) {
-                    const apiProps: string[] = [];
-                    for (const key in scriptComp.api) {
-                        apiProps.push(key);
-                    }
-                    this.log(`Script ${i} .api properties (${apiProps.length}): ${apiProps.join(', ')}`);
-                }
             }
         }
         
         if (micRecorder) {
             this.microphone!.setMicrophoneRecorder(micRecorder);
             this.character!.microphone = this.microphone;
-            this.log('MicrophoneRecorder configured successfully');
         } else {
             print("[EstuaryVoiceConnection] ERROR: Could not find MicrophoneRecorder API on any script component");
         }
@@ -742,7 +680,11 @@ export class EstuaryVoiceConnection extends BaseScriptComponent {
         if (this._diagTickCostLastPrintMs === 0) {
             this._diagTickCostLastPrintMs = now;
         } else if (now - this._diagTickCostLastPrintMs >= 1000) {
-            this.printTickCostStats();
+            if (this.showPerformanceDiagnostics) {
+                this.printTickCostStats();
+            } else {
+                this.resetTickCostStats();
+            }
             this._diagTickCostLastPrintMs = now;
         }
     }
@@ -767,7 +709,10 @@ export class EstuaryVoiceConnection extends BaseScriptComponent {
             `addFrame_avg=${avgAdd}ms addFrame_max=${this._diagAddFrameMaxMs}`
         );
 
-        // Reset rolling counters so each print shows the last ~1s window.
+        this.resetTickCostStats();
+    }
+
+    private resetTickCostStats(): void {
         this._diagOnUpdateSumMs = 0;
         this._diagOnUpdateMaxMs = 0;
         this._diagOnUpdateCount = 0;

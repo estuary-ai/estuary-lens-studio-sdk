@@ -537,13 +537,6 @@ export class EstuaryCharacter
     }
 
     handleCameraCaptureRequest(request: CameraCaptureRequest): void {
-        print('');
-        print('📷 ========================================');
-        print('📷 CAMERA CAPTURE REQUESTED!');
-        print(`📷 Subscribe to 'cameraCaptureRequest' event to handle this.`);
-        print(`📷 Then call sendCameraImage() with the captured image.`);
-        print('📷 ========================================');
-        print('');
         this.emit('cameraCaptureRequest', request);
     }
 

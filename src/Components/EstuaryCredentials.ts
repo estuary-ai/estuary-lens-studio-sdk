@@ -205,7 +205,6 @@ export class EstuaryCredentials extends BaseScriptComponent implements IEstuaryC
             this._usingSnapAccountId = false;
             // Store the manual User ID for future sessions
             store.putString(USER_ID_STORAGE_KEY, this._resolvedUserId);
-            this.log(`Using MANUAL User ID from field: ${this._resolvedUserId}`);
             this.printUserIdBanner("manual override");
             return;
         }
@@ -218,7 +217,6 @@ export class EstuaryCredentials extends BaseScriptComponent implements IEstuaryC
                 this._usingSnapAccountId = true;
                 // Cache the Snap User ID for faster access next session
                 store.putString(SNAP_USER_ID_CACHE_KEY, this._resolvedUserId);
-                this.log(`Using SNAP ACCOUNT User ID: ${this._resolvedUserId}`);
                 this.printUserIdBanner("Snap account");
                 return;
             }
@@ -230,13 +228,11 @@ export class EstuaryCredentials extends BaseScriptComponent implements IEstuaryC
                 if (trimmedCachedId.length > 0) {
                     this._resolvedUserId = trimmedCachedId;
                     this._usingSnapAccountId = true;
-                    this.log(`Using CACHED Snap Account User ID: ${this._resolvedUserId}`);
                     this.printUserIdBanner("cached Snap account");
                     return;
                 }
             }
             
-            this.log("Snap Account User ID not available, falling back to device storage...");
         }
         
         // Priority 4: Try to load stored User ID from device
@@ -247,7 +243,6 @@ export class EstuaryCredentials extends BaseScriptComponent implements IEstuaryC
             if (trimmedStoredId.length > 0) {
                 this._resolvedUserId = trimmedStoredId;
                 this._usingSnapAccountId = false;
-                this.log(`Loaded User ID from persistent storage: ${this._resolvedUserId}`);
                 this.printUserIdBanner("device storage");
                 return;
             }
@@ -257,8 +252,6 @@ export class EstuaryCredentials extends BaseScriptComponent implements IEstuaryC
         this._resolvedUserId = this.generateRandomUserId();
         this._usingSnapAccountId = false;
         store.putString(USER_ID_STORAGE_KEY, this._resolvedUserId);
-        this.log(`Generated new User ID: ${this._resolvedUserId}`);
-        this.log(`Stored User ID in persistent storage`);
         this.printUserIdBanner("generated");
     }
     
@@ -293,7 +286,6 @@ export class EstuaryCredentials extends BaseScriptComponent implements IEstuaryC
             
             // If we got a display name, use it to create a stable user ID
             if (displayName && displayName.length > 0) {
-                this.log(`Got displayName from userContextSystem: ${displayName}`);
                 // Create a stable hash from display name with spectacles_ prefix
                 // Format matches the original: spectacles_ + identifier
                 return `spectacles_${this.hashString(displayName)}`;
@@ -331,7 +323,6 @@ export class EstuaryCredentials extends BaseScriptComponent implements IEstuaryC
                         
                         // Cache this for next session
                         store.putString(SNAP_USER_ID_CACHE_KEY, snapUserId);
-                        this.log(`Async: Cached Snap user ID for next session: ${snapUserId}`);
                         
                         // If we're not yet using a Snap account ID, update to use it
                         // Check if current ID looks like a timestamp-based generated ID (longer format)
@@ -339,7 +330,6 @@ export class EstuaryCredentials extends BaseScriptComponent implements IEstuaryC
                             this._resolvedUserId = snapUserId;
                             this._usingSnapAccountId = true;
                             store.putString(USER_ID_STORAGE_KEY, snapUserId);
-                            this.log(`Async: Updated current session to use Snap user ID: ${snapUserId}`);
                             this.printUserIdBanner("Snap account (async)");
                         }
                     }
@@ -365,20 +355,9 @@ export class EstuaryCredentials extends BaseScriptComponent implements IEstuaryC
         return Math.abs(hash).toString(36);
     }
     
-    /**
-     * Print the current User ID prominently to the Logger.
-     * @param source Description of where the User ID came from
-     */
+    /** Log where the resolved ID came from without exposing the ID. */
     private printUserIdBanner(source: string): void {
-        if (!this.debugMode) return;
-        print("╔════════════════════════════════════════════════════════════╗");
-        print("║  ESTUARY USER ID                                           ║");
-        print("║  " + this._resolvedUserId.padEnd(58) + "║");
-        print("║  Source: " + source.padEnd(50) + "║");
-        if (this._usingSnapAccountId) {
-            print("║  ✓ Cross-device persistence enabled (Snap account)        ║");
-        }
-        print("╚════════════════════════════════════════════════════════════╝");
+        this.log(`User ID source: ${source}`);
     }
     
     /**
@@ -411,23 +390,6 @@ export class EstuaryCredentials extends BaseScriptComponent implements IEstuaryC
         if (!this._resolvedUserId || this._resolvedUserId.length === 0) {
             print("[EstuaryCredentials] ⚠️ WARNING: User ID could not be resolved!");
             isValid = false;
-        }
-        
-        if (isValid) {
-            this.log("✅ Credentials configured successfully");
-            this.log(`   User ID: ${this._resolvedUserId}`);
-            let source: string;
-            if (this.userIdField && this.userIdField.trim().length > 0) {
-                source = 'manual (from inspector field)';
-            } else if (this._usingSnapAccountId) {
-                source = 'Snap account (cross-device)';
-            } else {
-                source = 'device storage (device-specific)';
-            }
-            this.log(`   User ID source: ${source}`);
-            if (this._usingSnapAccountId) {
-                this.log(`   ✓ Conversation will persist across all devices on this Snap account`);
-            }
         }
         
         return isValid;

@@ -568,7 +568,6 @@ export class EstuaryHttpClient {
      * @returns Object with status code and response body text
      */
     private async fetchJson(method: 'GET' | 'POST', url: string, body?: string, extraHeaders?: Record<string, string>, timeoutMs?: number): Promise<{ status: number; body: string; retryAfter: string | null }> {
-        this.log(`HTTP ${method} ${url.substring(0, 100)}`);
 
         const internetModule = getInternetModule();
         if (!internetModule) {
@@ -625,7 +624,6 @@ export class EstuaryHttpClient {
                         const statusCode = response?.statusCode ?? 0;
                         const responseBody = response?.body || '';
                         const retryAfter = typeof response?.getHeader === 'function' ? response.getHeader('Retry-After') : null;
-                        this.log(`HTTP response: status=${statusCode}, body=${responseBody.substring(0, 200)}`);
                         settled = true;
                         resolve({ status: statusCode, body: responseBody, retryAfter });
                     } catch (error: any) {

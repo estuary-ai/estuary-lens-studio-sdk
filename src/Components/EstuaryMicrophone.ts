@@ -70,17 +70,12 @@ export class EstuaryMicrophone
     /** Whether currently recording */
     private _isRecording: boolean = false;
 
-    /** Frame counter for debug logging */
+    /** Frame counter for sample-rate checks */
     private _frameCount: number = 0;
 
-    /** Track frames that had audio vs empty frames */
-    private _framesWithAudio: number = 0;
-
-    /** Chunks sent counter */
-    private _chunksSent: number = 0;
-
-    /** Timestamp of last audio send (for diagnostics) */
-    private _lastSendTime: number = 0;
+    /** Warn once per recording when audio cannot be sent. */
+    private _warnedMissingTarget: boolean = false;
+    private _warnedEffectiveRateMismatch: boolean = false;
 
     /** Buffer for accumulating small audio frames into sendable chunks */
     private _pendingAudioBuffer: Float32Array | null = null;
@@ -116,26 +111,12 @@ export class EstuaryMicrophone
     private _recordingStartMs: number = 0;
     /** Running total of samples (real + synthesized silence) fed to sendAudioToBackend. */
     private _totalSamplesEnqueued: number = 0;
-    /** Cumulative synthesized silence samples for diagnostics. */
-    private _diagSilenceSamples: number = 0;
 
     // ==================== Diagnostics ====================
     /** Timestamp of first audio frame after recording started (for sample-rate inference) */
     private _diagFirstFrameMs: number = 0;
     /** Accumulated samples since recording started, for sample-rate inference */
     private _diagSamplesSinceStart: number = 0;
-    /** Last chunk send timestamp used to compute inter-chunk cadence */
-    private _diagLastChunkMs: number = 0;
-    /** Rolling sum of inter-chunk intervals for cadence stats */
-    private _diagChunkIntervalSumMs: number = 0;
-    /** Count of sampled inter-chunk intervals */
-    private _diagChunkIntervalSamples: number = 0;
-    /** Count of frames where audioFrame was null or length 0 */
-    private _diagEmptyFrameCount: number = 0;
-    /** Min frame size observed (non-empty) */
-    private _diagMinFrameSamples: number = 0;
-    /** Max frame size observed */
-    private _diagMaxFrameSamples: number = 0;
 
     // ==================== Direct-Mic Mode (bypasses RSG) ====================
     /** When true, pull audio directly from AudioTrackAsset.control instead of RSG's MicrophoneRecorder */
@@ -209,13 +190,9 @@ export class EstuaryMicrophone
     setMicrophoneRecorder(recorder: MicrophoneRecorder): void {
         this._microphoneRecorder = recorder;
 
-        print('[EstuaryMicrophone] ========================================');
-        print('[EstuaryMicrophone] Setting up MicrophoneRecorder...');
-
         // Set sample rate to match Deepgram requirements
         if (typeof recorder.setSampleRate === 'function') {
             recorder.setSampleRate(this._sampleRate);
-            print(`[EstuaryMicrophone] Set sample rate to ${this._sampleRate}Hz`);
 
             // ---- DIAGNOSTIC: read the actual sample rate back ----
             // RSG's MicrophoneRecorder stores a `private micAudioProvider` on the
@@ -227,11 +204,6 @@ export class EstuaryMicrophone
                 const provider = (recorder as any).micAudioProvider;
                 if (provider) {
                     const actualRate = provider.sampleRate;
-                    const maxFrameSize = provider.maxFrameSize;
-                    print(
-                        `[EstuaryDiag] MIC requested_rate=${this._sampleRate} ` +
-                        `actual_rate=${actualRate} maxFrameSize=${maxFrameSize}`
-                    );
                     if (typeof actualRate === 'number' && actualRate !== this._sampleRate) {
                         print(
                             `[EstuaryDiag] ⚠️ SAMPLE RATE MISMATCH — requested ` +
@@ -239,11 +211,9 @@ export class EstuaryMicrophone
                             `receive pitch-shifted audio and STT will fail or lag.`
                         );
                     }
-                } else {
-                    print('[EstuaryDiag] MIC provider introspection unavailable (no .micAudioProvider field)');
                 }
             } catch (e) {
-                print('[EstuaryDiag] MIC provider readback threw: ' + e);
+                this.log('Microphone sample-rate readback unavailable: ' + e);
             }
         } else {
             print(`[EstuaryMicrophone] ⚠️ setSampleRate not available, using default`);
@@ -254,14 +224,10 @@ export class EstuaryMicrophone
             recorder.onAudioFrame.add((audioFrame: Float32Array) => {
                 this.handleAudioFrame(audioFrame);
             });
-            print('[EstuaryMicrophone] ✅ Subscribed to onAudioFrame events');
         } else {
             print('[EstuaryMicrophone] ❌ ERROR: onAudioFrame.add not available!');
             return;
         }
-
-        print('[EstuaryMicrophone] ✅ MicrophoneRecorder configured');
-        print('[EstuaryMicrophone] ========================================');
     }
 
     /**
@@ -278,9 +244,6 @@ export class EstuaryMicrophone
      * @param audioTrack The mic AudioTrackAsset from the scene
      */
     setAudioTrackAsset(audioTrack: any): void {
-        print('[EstuaryMicrophone] ========================================');
-        print('[EstuaryMicrophone] Setting up DIRECT mic capture (RSG bypass)...');
-
         if (!audioTrack) {
             print('[EstuaryMicrophone] ❌ ERROR: audioTrack is null');
             return;
@@ -303,15 +266,12 @@ export class EstuaryMicrophone
         }
 
         const actualRate = provider.sampleRate;
+        if (typeof actualRate === 'number' && actualRate !== this._sampleRate) {
+            print(`[EstuaryMicrophone] WARNING: Direct mic sample rate is ${actualRate}Hz, expected ${this._sampleRate}Hz`);
+        }
         const maxFrameSize = provider.maxFrameSize;
-        print(
-            `[EstuaryDiag] DIRECT_MIC requested_rate=${this._sampleRate} ` +
-            `actual_rate=${actualRate} maxFrameSize=${maxFrameSize}`
-        );
-
         // Prefer native PCM16 conversion if available
         this._directUsePcmNative = typeof provider.getAudioFramePCM16 === 'function';
-        print(`[EstuaryDiag] DIRECT_MIC use_pcm_native=${this._directUsePcmNative}`);
 
         // Pre-allocate a reasonable buffer: ~128ms at 16kHz = 2048 samples.
         // Smaller than RSG's maxFrameSize (16384) to avoid over-allocation per call
@@ -319,13 +279,6 @@ export class EstuaryMicrophone
         const bufferSize = Math.min(2048, maxFrameSize || 2048);
         this._directPcmBuffer = new Int16Array(bufferSize);
         this._directFloatBuffer = new Float32Array(bufferSize);
-        print(
-            `[EstuaryDiag] DIRECT_MIC buffer_size=${bufferSize} samples ` +
-            `(~${Math.round((bufferSize * 1000) / this._sampleRate)}ms at ${this._sampleRate}Hz)`
-        );
-
-        print('[EstuaryMicrophone] ✅ Direct mic capture configured');
-        print('[EstuaryMicrophone] ========================================');
     }
 
     /**
@@ -387,23 +340,16 @@ export class EstuaryMicrophone
         }
 
         this._isRecording = true;
-        this._chunksSent = 0;
         this._frameCount = 0;
-        this._framesWithAudio = 0;
+        this._warnedMissingTarget = false;
+        this._warnedEffectiveRateMismatch = false;
         this._pendingAudioBuffer = null;
         // Silence padding state — reset so the wall-clock-vs-enqueued ratio starts fresh
         this._recordingStartMs = Date.now();
         this._totalSamplesEnqueued = 0;
-        // Reset diagnostics so sample-rate / cadence measurements restart cleanly
+        // Reset sample-rate measurement for this recording
         this._diagFirstFrameMs = 0;
         this._diagSamplesSinceStart = 0;
-        this._diagLastChunkMs = 0;
-        this._diagChunkIntervalSumMs = 0;
-        this._diagChunkIntervalSamples = 0;
-        this._diagEmptyFrameCount = 0;
-        this._diagMinFrameSamples = 0;
-        this._diagMaxFrameSamples = 0;
-        this._diagSilenceSamples = 0;
 
         if (this._directMode && this._directAudioProvider) {
             try {
@@ -411,12 +357,10 @@ export class EstuaryMicrophone
             } catch (e) {
                 print('[EstuaryMicrophone] direct provider.start() threw: ' + e);
             }
-            print('[EstuaryDiag] DIRECT_MIC started (host must call pullAudioFrames every tick)');
         } else if (this._microphoneRecorder) {
             this._microphoneRecorder.startRecording();
         }
 
-        print('[EstuaryMicrophone] ✅ Started recording');
         this.emit('recordingStarted');
     }
 
@@ -444,19 +388,12 @@ export class EstuaryMicrophone
             this._pendingAudioBuffer = null;
             const pcmBytes = floatToPCM16(chunk);
             const base64Audio = Base64.encode(pcmBytes);
-            this._chunksSent++;
             this._targetCharacter.streamAudio(base64Audio);
         }
         this._pendingAudioBuffer = null;
 
         this._isRecording = false;
         
-        // Log final stats
-        if (this._chunksSent > 0) {
-            print(`[EstuaryMicrophone] Recording stats: sent=${this._chunksSent}, frames=${this._frameCount}, withAudio=${this._framesWithAudio}`);
-        }
-        
-        print('[EstuaryMicrophone] Stopped recording');
         this.emit('recordingStopped');
     }
 
@@ -488,11 +425,6 @@ export class EstuaryMicrophone
      * Handle audio frame from MicrophoneRecorder event.
      */
     private handleAudioFrame(audioFrame: Float32Array): void {
-        // Log first frame unconditionally for diagnostics (even if not recording)
-        if (this._frameCount === 0 && !this._isRecording) {
-            print(`[EstuaryMicrophone] DIAG: onAudioFrame fired but _isRecording=false, frame exists=${!!audioFrame}, length=${audioFrame?.length || 0}`);
-        }
-
         if (!this._isRecording) {
             return;
         }
@@ -500,34 +432,13 @@ export class EstuaryMicrophone
         this._frameCount++;
         const frameLen = audioFrame ? audioFrame.length : 0;
 
-        // One-time diagnostic log on first frame while recording
+        // Start sample-rate measurement with the first recorded frame
         if (this._frameCount === 1) {
-            print(`[EstuaryMicrophone] DIAG: First audio frame while recording — length=${frameLen}, isRecording=${this._isRecording}`);
             this._diagFirstFrameMs = Date.now();
             this._diagSamplesSinceStart = 0;
         }
 
-        // ---- DIAGNOSTIC: log first 10 frame sizes so we see the distribution ----
-        if (this._frameCount <= 10) {
-            print(`[EstuaryDiag] MIC frame #${this._frameCount} size=${frameLen}`);
-        }
-
-        // Track empty frames separately so we can tell if the 72% loss is
-        // frame-drop (empty frames count normally but carry nothing) vs
-        // consistently-small frames (actual rate mismatch).
-        if (frameLen === 0) {
-            this._diagEmptyFrameCount++;
-        } else {
-            if (this._diagMinFrameSamples === 0 || frameLen < this._diagMinFrameSamples) {
-                this._diagMinFrameSamples = frameLen;
-            }
-            if (frameLen > this._diagMaxFrameSamples) {
-                this._diagMaxFrameSamples = frameLen;
-            }
-        }
-
         if (frameLen > 0) {
-            this._framesWithAudio++;
 
             // ---- DIAGNOSTIC: infer effective capture sample rate from wall-clock + sample count ----
             // If configured is 16000 but we measure ~48000, Spectacles silently
@@ -538,34 +449,14 @@ export class EstuaryMicrophone
                 const measuredHz = elapsedMs > 0
                     ? Math.round((this._diagSamplesSinceStart * 1000) / elapsedMs)
                     : 0;
-                // Divide samples by frames-with-audio for the true average non-empty frame size
-                const avgNonEmptyFrame = this._framesWithAudio > 0
-                    ? Math.round(this._diagSamplesSinceStart / this._framesWithAudio)
-                    : 0;
-                const emptyPct = this._frameCount > 0
-                    ? Math.round((this._diagEmptyFrameCount * 100) / this._frameCount)
-                    : 0;
-                print(
-                    `[EstuaryDiag] MIC measured over ${this._frameCount} frames: ` +
-                    `elapsed_ms=${elapsedMs} total_samples=${this._diagSamplesSinceStart} ` +
-                    `measured_hz=${measuredHz} frames_with_audio=${this._framesWithAudio} ` +
-                    `empty_frames=${this._diagEmptyFrameCount} (${emptyPct}%) ` +
-                    `avg_nonempty_samples=${avgNonEmptyFrame} ` +
-                    `min=${this._diagMinFrameSamples} max=${this._diagMaxFrameSamples} ` +
-                    `configured_hz=${this._sampleRate}`
-                );
-                if (measuredHz > 0 && Math.abs(measuredHz - this._sampleRate) > this._sampleRate * 0.1) {
+                if (!this._warnedEffectiveRateMismatch && measuredHz > 0 && Math.abs(measuredHz - this._sampleRate) > this._sampleRate * 0.1) {
+                    this._warnedEffectiveRateMismatch = true;
                     print(
                         `[EstuaryDiag] ⚠️ EFFECTIVE RATE MISMATCH — measured ${measuredHz}Hz ` +
                         `but configured ${this._sampleRate}Hz. Deepgram is receiving ` +
                         `pitch-shifted audio; STT will degrade badly.`
                     );
                 }
-            }
-
-            // Debug logging every 100 frames
-            if (this._debugLogging && this._frameCount % 100 === 0) {
-                print(`[EstuaryMicrophone] Frame ${this._frameCount}: ${frameLen} samples`);
             }
 
             // Send real audio to backend
@@ -595,25 +486,6 @@ export class EstuaryMicrophone
                 const silence = new Float32Array(deficit); // zero-filled
                 this.sendAudioToBackend(silence);
                 this._totalSamplesEnqueued += deficit;
-                this._diagSilenceSamples += deficit;
-            }
-
-            // Print silence-padding health every 300 frames so we can see
-            // how much of the outgoing stream is real vs synthesized.
-            if (this._frameCount === 60 || this._frameCount === 300 || this._frameCount === 900) {
-                const realSamples = this._totalSamplesEnqueued - this._diagSilenceSamples;
-                const silencePct = this._totalSamplesEnqueued > 0
-                    ? Math.round((this._diagSilenceSamples * 100) / this._totalSamplesEnqueued)
-                    : 0;
-                const effectiveHz = elapsedMs > 0
-                    ? Math.round((this._totalSamplesEnqueued * 1000) / elapsedMs)
-                    : 0;
-                print(
-                    `[EstuaryDiag] PADDING after ${this._frameCount} frames: ` +
-                    `total_enqueued=${this._totalSamplesEnqueued} real=${realSamples} ` +
-                    `silence=${this._diagSilenceSamples} (${silencePct}%) ` +
-                    `effective_hz=${effectiveHz} target=${this._sampleRate}`
-                );
             }
         }
     }
@@ -627,8 +499,9 @@ export class EstuaryMicrophone
      */
     private sendAudioToBackend(samples: Float32Array): void {
         if (!this._targetCharacter || !this._targetCharacter.isConnected) {
-            if (this._chunksSent === 0) {
-                print(`[EstuaryMicrophone] DIAG: Audio not sent — targetCharacter=${!!this._targetCharacter}, isConnected=${this._targetCharacter?.isConnected}`);
+            if (!this._warnedMissingTarget) {
+                print('[EstuaryMicrophone] WARNING: Audio dropped because the character is disconnected');
+                this._warnedMissingTarget = true;
             }
             return;
         }
@@ -654,39 +527,6 @@ export class EstuaryMicrophone
 
         const pcmBytes = floatToPCM16(chunk);
         const base64Audio = Base64.encode(pcmBytes);
-
-        this._chunksSent++;
-        const nowMs = Date.now();
-
-        // ---- DIAGNOSTIC: track inter-chunk cadence ----
-        // This chunk interval should be ~80ms at 16kHz (1280 samples).
-        // If the actual interval drifts up, it means the update loop is
-        // stalling and the send queue will back up.
-        if (this._diagLastChunkMs > 0) {
-            const interval = nowMs - this._diagLastChunkMs;
-            this._diagChunkIntervalSumMs += interval;
-            this._diagChunkIntervalSamples++;
-        }
-        this._diagLastChunkMs = nowMs;
-        this._lastSendTime = nowMs;
-
-        // Log first chunk to confirm audio is being sent
-        if (this._chunksSent === 1) {
-            print(`[EstuaryMicrophone] ✅ First audio chunk sent: ${chunk.length} samples @ ${this._sampleRate}Hz, base64 length=${base64Audio.length}`);
-        }
-
-        // Cadence stats every 20 chunks
-        if (this._chunksSent % 20 === 0 && this._diagChunkIntervalSamples > 0) {
-            const avg = (this._diagChunkIntervalSumMs / this._diagChunkIntervalSamples).toFixed(1);
-            const expected = Math.round((this._minChunkSamples * 1000) / this._sampleRate);
-            print(
-                `[EstuaryDiag] MIC chunk cadence over ${this._diagChunkIntervalSamples} samples: ` +
-                `avg=${avg}ms expected~${expected}ms chunks_sent=${this._chunksSent} ` +
-                `frames=${this._frameCount}`
-            );
-            this._diagChunkIntervalSumMs = 0;
-            this._diagChunkIntervalSamples = 0;
-        }
 
         this._targetCharacter.streamAudio(base64Audio);
         this.emit('audioChunkSent', chunk.length);

@@ -175,7 +175,6 @@ export class EstuaryManager extends EventEmitter<ConversationEventHandlers> {
         const key = this.getCharacterKey(character);
         this._registeredCharacters.set(key, character);
 
-        this.log(`Registered character: ${character.characterId} (player: ${character.playerId})`);
 
         // If this is the first character, make it active
         if (!this._activeCharacter) {
@@ -470,56 +469,48 @@ export class EstuaryManager extends EventEmitter<ConversationEventHandlers> {
     // ==================== Event Handlers ====================
 
     private handleSessionConnected(sessionInfo: SessionInfo): void {
-        this.log(`Session connected: ${JSON.stringify(sessionInfo)}`);
         if (this._activeCharacter) {
             this._activeCharacter.handleSessionConnected(sessionInfo);
         }
     }
 
     private handleDisconnected(reason: string): void {
-        this.log(`Disconnected: ${reason}`);
         if (this._activeCharacter) {
             this._activeCharacter.handleDisconnected(reason);
         }
     }
 
     private handleBotResponse(response: BotResponse): void {
-        this.log(`Bot response received`);
         if (this._activeCharacter) {
             this._activeCharacter.handleBotResponse(response);
         }
     }
 
     private handleBotVoice(voice: BotVoice): void {
-        this.log(`Bot voice received: chunk ${voice.chunkIndex}`);
         if (this._activeCharacter) {
             this._activeCharacter.handleBotVoice(voice);
         }
     }
 
     private handleClientAction(action: ClientActionEvent): void {
-        this.log(`Client action received: ${action.name}`);
         if (this._activeCharacter && this._activeCharacter.handleClientAction) {
             this._activeCharacter.handleClientAction(action);
         }
     }
 
     private handleSttResponse(response: SttResponse): void {
-        this.log(`STT response: "${response.text}"`);
         if (this._activeCharacter) {
             this._activeCharacter.handleSttResponse(response);
         }
     }
 
     private handleInterrupt(data: InterruptData): void {
-        this.log(`Interrupt received`);
         if (this._activeCharacter) {
             this._activeCharacter.handleInterrupt(data);
         }
     }
 
     private handleVoiceTimeout(data: any): void {
-        this.log(`Voice released by server (voice_timeout) — socket stays connected`);
         this.emit('voiceTimeout', data);
         if (this._activeCharacter && this._activeCharacter.handleVoiceTimeout) {
             this._activeCharacter.handleVoiceTimeout(data);
@@ -527,7 +518,6 @@ export class EstuaryManager extends EventEmitter<ConversationEventHandlers> {
     }
 
     private handleSessionTimeout(data: any): void {
-        this.log(`Session ended by server (session_timeout) — disconnect follows, no auto-reconnect`);
         this.emit('sessionTimeout', data);
         if (this._activeCharacter && this._activeCharacter.handleSessionTimeout) {
             this._activeCharacter.handleSessionTimeout(data);
@@ -543,7 +533,6 @@ export class EstuaryManager extends EventEmitter<ConversationEventHandlers> {
     }
 
     private handleConnectionStateChanged(state: ConnectionState): void {
-        this.log(`Connection state: ${state}`);
         this.emit('connectionStateChanged', state);
         if (this._activeCharacter) {
             this._activeCharacter.handleConnectionStateChanged(state);
@@ -551,7 +540,6 @@ export class EstuaryManager extends EventEmitter<ConversationEventHandlers> {
     }
 
     private handleCameraCaptureRequest(request: CameraCaptureRequest): void {
-        this.log(`Camera capture request: ${request.request_id}`);
         this.emit('cameraCaptureRequest', request);
         if (this._activeCharacter) {
             this._activeCharacter.handleCameraCaptureRequest(request);
