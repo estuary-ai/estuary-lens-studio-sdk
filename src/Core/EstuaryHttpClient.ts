@@ -1,12 +1,12 @@
 /**
  * HTTP client for Estuary REST API endpoints on Lens Studio / Spectacles.
  *
- * Uses the global Fetch API (available in Lens Studio 5.3+ / Spectacles OS 5.58+)
- * for all HTTP operations. Auth credentials are sent via X-API-Key and X-Player-Id
+ * Uses InternetModule.performHttpRequest and RemoteServiceHttpRequest for all
+ * HTTP operations. Auth credentials are sent via X-API-Key and X-Player-Id
  * headers rather than query parameters.
  *
- * Because Spectacles cannot use multipart/form-data (Fetch API only supports string
- * bodies), image uploads use JSON+base64 encoding.
+ * Because this Spectacles request path uses string bodies, image uploads use
+ * JSON+base64 encoding.
  */
 
 import { EstuaryConfig } from './EstuaryConfig';
@@ -29,7 +29,7 @@ import { CharacterListResponse, parseCharacterListResponse } from '../Models/Cha
  * - Polling 3D model generation status with exponential backoff
  * - Listing characters via paginated GET
  *
- * Uses the global fetch() API. Requires Lens Studio 5.3+ / Spectacles OS 5.58+.
+ * Uses Lens Studio's InternetModule HTTP API.
  */
 /**
  * SDK version, sent to the gateway as `X-Estuary-Client: estuary-lens-studio-sdk/<version>`.
@@ -46,6 +46,69 @@ export interface ImageToCharacterOptions {
     voicePrompt?: string;
     /** Custom persona/personality description (replaces default, char limit applied automatically) */
     personaPrompt?: string;
+    /** Internal resume hook: reuse a key from ImageUploadFailedError for the same image. */
+    _idempotencyKeyOverride?: string;
+}
+
+/** A transient image upload exhausted its retry budget. Persist the key to resume safely. */
+export class ImageUploadFailedError extends Error {
+    readonly idempotency_key: string;
+    readonly attempts: number;
+    readonly last_status: number | null;
+    readonly last_response_text: string | null;
+
+    constructor(key: string, attempts: number, status: number | null, responseText: string | null) {
+        super(`Image upload failed after ${attempts} attempts (idempotency_key=${key})`);
+        this.name = 'ImageUploadFailedError';
+        this.idempotency_key = key;
+        this.attempts = attempts;
+        this.last_status = status;
+        this.last_response_text = responseText;
+    }
+}
+
+const UPLOAD_MAX_ATTEMPTS = 3;
+const RETRY_AFTER_CAP_MS = 30000;
+const UPLOAD_REQUEST_TIMEOUT_MS = 35000;
+
+/** Lens Studio has no crypto.randomUUID(). Math.random provides uniqueness, not cryptographic entropy. */
+function imageUploadKey(): string {
+    let key = '';
+    for (let i = 0; i < 32; i++) {
+        const digit = i === 12 ? 4 : i === 16 ? 8 + Math.floor(Math.random() * 4) : Math.floor(Math.random() * 16);
+        key += digit.toString(16);
+    }
+    return key;
+}
+
+function retryAfterMs(value: string | null): number | null {
+    if (!value) return null;
+    const trimmed = value.trim();
+    if (/^\d+$/.test(trimmed)) {
+        return Math.min(Number(trimmed) * 1000, RETRY_AFTER_CAP_MS);
+    }
+    const date = Date.parse(trimmed);
+    return isNaN(date) ? null : Math.min(Math.max(0, date - Date.now()), RETRY_AFTER_CAP_MS);
+}
+
+function retryDelayMs(attempt: number): number {
+    return (attempt === 1 ? 1000 : 2000) * (0.75 + Math.random() * 0.5);
+}
+
+/** Bound diagnostics to 512 UTF-8 bytes without cutting a surrogate pair. */
+function responsePrefix(value: string): string {
+    let bytes = 0;
+    let end = 0;
+    while (end < value.length) {
+        const code = value.charCodeAt(end);
+        const pair = code >= 0xd800 && code <= 0xdbff && end + 1 < value.length
+            && value.charCodeAt(end + 1) >= 0xdc00 && value.charCodeAt(end + 1) <= 0xdfff;
+        const width = pair ? 4 : code <= 0x7f ? 1 : code <= 0x7ff ? 2 : 3;
+        if (bytes + width > 512) break;
+        bytes += width;
+        end += pair ? 2 : 1;
+    }
+    return value.substring(0, end);
 }
 
 export class EstuaryHttpClient {
@@ -74,10 +137,12 @@ export class EstuaryHttpClient {
      *
      * @param imageBase64 Base64-encoded image data (no data URI prefix)
      * @param mimeType MIME type of the image (e.g., "image/jpeg", "image/png")
-     * @param options Optional appearance and voice prompt overrides
+     * @param options Optional prompt overrides; _idempotencyKeyOverride resumes a failed upload
      * @returns The created AgentResponse
      */
     async uploadImageToCharacter(imageBase64: string, mimeType: string, options?: ImageToCharacterOptions): Promise<AgentResponse> {
+        const key = options?._idempotencyKeyOverride || imageUploadKey();
+        if (key.length > 255) throw new Error('Idempotency key must be at most 255 characters');
         const url = this.getHttpBaseUrl() + '/api/v1/characters/from-image';
         const payload: Record<string, string> = {
             image: imageBase64,
@@ -96,16 +161,47 @@ export class EstuaryHttpClient {
 
         this.log(`Uploading image to character (${mimeType}, ${Math.round(imageBase64.length / 1024)}KB base64)`);
 
-        const { status, body: responseBody } = await this.fetchJson('POST', url, body);
+        let lastStatus: number | null = null;
+        let lastText: string | null = null;
+        for (let attempt = 1; attempt <= UPLOAD_MAX_ATTEMPTS; attempt++) {
+            let result: { status: number; body: string; retryAfter: string | null };
+            try {
+                result = await this.fetchJson('POST', url, body, { 'Idempotency-Key': key }, UPLOAD_REQUEST_TIMEOUT_MS);
+            } catch (error: any) {
+                // Preserve the last actual HTTP response when a later transport attempt fails.
+                if (attempt === UPLOAD_MAX_ATTEMPTS) {
+                    throw new ImageUploadFailedError(key, attempt, lastStatus, lastText);
+                }
+                this.log(`Upload attempt ${attempt} transport failure: ${String(error)}`);
+                await this.waitForRetry(retryDelayMs(attempt));
+                continue;
+            }
 
-        if (status >= 200 && status < 300) {
-            const json = JSON.parse(responseBody);
-            const agent = parseAgentResponse(json);
-            this.log(`Character created: ${agent.id} "${agent.name}"`);
-            return agent;
-        } else {
-            throw new Error(`Upload failed with status ${status}: ${responseBody.substring(0, 200)}`);
+            const { status, body: responseBody, retryAfter } = result;
+            if (status > 0) {
+                lastStatus = status;
+                lastText = responsePrefix(responseBody);
+            }
+            if (status >= 200 && status < 300) {
+                const agent = parseAgentResponse(JSON.parse(responseBody));
+                this.log(`Character created: ${agent.id} "${agent.name}"`);
+                return agent;
+            }
+            const retryable = status <= 0 || status === 429 || status === 502 || status === 503 || status === 504;
+            if (!retryable) {
+                // A timed-out first request may still be creating the character.
+                // The server returns 409 while its idempotency sentinel is pending;
+                // expose the key so the caller can safely resume later.
+                if (status === 409) throw new ImageUploadFailedError(key, attempt, lastStatus, lastText);
+                throw new Error(`Upload failed with status ${status}: ${responseBody.substring(0, 200)}`);
+            }
+            if (attempt === UPLOAD_MAX_ATTEMPTS) {
+                throw new ImageUploadFailedError(key, attempt, lastStatus, lastText);
+            }
+            const delay = status === 429 ? retryAfterMs(retryAfter) : null;
+            await this.waitForRetry(delay === null ? retryDelayMs(attempt) : delay);
         }
+        throw new ImageUploadFailedError(key, UPLOAD_MAX_ATTEMPTS, lastStatus, lastText);
     }
 
     /**
@@ -452,14 +548,14 @@ export class EstuaryHttpClient {
     // ---- Private helpers ----
 
     /**
-     * Perform an HTTP request using the global Fetch API.
+     * Perform an HTTP request using RemoteServiceHttpRequest.
      *
      * @param method HTTP method ('GET' or 'POST')
      * @param url Full request URL
      * @param body Request body (for POST) or undefined (for GET)
      * @returns Object with status code and response body text
      */
-    private async fetchJson(method: 'GET' | 'POST', url: string, body?: string): Promise<{ status: number; body: string }> {
+    private async fetchJson(method: 'GET' | 'POST', url: string, body?: string, extraHeaders?: Record<string, string>, timeoutMs?: number): Promise<{ status: number; body: string; retryAfter: string | null }> {
         this.log(`HTTP ${method} ${url.substring(0, 100)}`);
 
         const internetModule = getInternetModule();
@@ -467,7 +563,8 @@ export class EstuaryHttpClient {
             throw new Error('InternetModule not available. Call setInternetModule() first.');
         }
 
-        return new Promise<{ status: number; body: string }>((resolve, reject) => {
+        return new Promise<{ status: number; body: string; retryAfter: string | null }>((resolve, reject) => {
+            let settled = false;
             try {
                 // @ts-ignore - Lens Studio global RemoteServiceHttpRequest
                 const request = RemoteServiceHttpRequest.create();
@@ -492,21 +589,47 @@ export class EstuaryHttpClient {
                 request.setHeader('User-Agent', 'EstuarySDK/1.0');
                 // Identifies this SDK and version to the gateway (REST only, never on the WebSocket)
                 request.setHeader('X-Estuary-Client', 'estuary-lens-studio-sdk/' + ESTUARY_SDK_VERSION);
+                if (extraHeaders) {
+                    for (const name in extraHeaders) request.setHeader(name, extraHeaders[name]);
+                }
 
                 if (body) {
                     request.body = body;
                 }
 
+                if (timeoutMs) {
+                    this.scheduleDelayedCallback(() => {
+                        if (!settled) {
+                            settled = true;
+                            reject(new Error(`HTTP request timed out after ${timeoutMs}ms`));
+                        }
+                    }, timeoutMs);
+                }
                 internetModule.performHttpRequest(request, (response: any) => {
-                    const statusCode = response.statusCode || 0;
-                    const responseBody = response.body || '';
-                    this.log(`HTTP response: status=${statusCode}, body=${responseBody.substring(0, 200)}`);
-                    resolve({ status: statusCode, body: responseBody });
+                    if (settled) return;
+                    try {
+                        const statusCode = response?.statusCode ?? 0;
+                        const responseBody = response?.body || '';
+                        const retryAfter = typeof response?.getHeader === 'function' ? response.getHeader('Retry-After') : null;
+                        this.log(`HTTP response: status=${statusCode}, body=${responseBody.substring(0, 200)}`);
+                        settled = true;
+                        resolve({ status: statusCode, body: responseBody, retryAfter });
+                    } catch (error: any) {
+                        settled = true;
+                        reject(new Error('HTTP response failed: ' + (error.message || String(error))));
+                    }
                 });
             } catch (error: any) {
-                reject(new Error('HTTP request failed: ' + (error.message || String(error))));
+                if (!settled) {
+                    settled = true;
+                    reject(new Error('HTTP request failed: ' + (error.message || String(error))));
+                }
             }
         });
+    }
+
+    private waitForRetry(delayMs: number): Promise<void> {
+        return new Promise<void>(resolve => this.scheduleDelayedCallback(resolve, delayMs));
     }
 
     /**
@@ -523,24 +646,12 @@ export class EstuaryHttpClient {
         return url.replace(/\/$/, '');
     }
 
-    /**
-     * Schedule a delayed callback. Uses a simple setTimeout pattern
-     * which works in both Lens Studio runtime and standard JS environments.
-     */
+    /** Schedule on the Lens scripting thread (also works in Node tests). */
     private scheduleDelayedCallback(callback: () => void, delayMs: number): void {
-        // @ts-ignore - Lens Studio global or standard JS
-        if (typeof DelayedCallbackEvent !== 'undefined') {
-            // @ts-ignore - Lens Studio delayed callback API
-            const event = DelayedCallbackEvent.create();
-            event.bind(callback);
-            event.reset(delayMs / 1000); // Lens Studio uses seconds
-        // @ts-ignore - setTimeout available in some Lens Studio environments
-        } else if (typeof setTimeout !== 'undefined') {
-            // @ts-ignore
+        if (typeof setTimeout === 'function') {
             setTimeout(callback, delayMs);
         } else {
-            // Fallback: call immediately (not ideal but prevents hanging)
-            callback();
+            throw new Error('Lens Studio setTimeout is required for HTTP polling and upload retries');
         }
     }
 

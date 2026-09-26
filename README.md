@@ -11,6 +11,29 @@ TypeScript SDK for integrating Estuary AI characters with voice and text chat ca
 - **WebSocket Communication**: Built-in Socket.IO v4 protocol implementation
 - **TypeScript Support**: Full type definitions for Lens Studio development
 
+## Resilient image upload
+
+`EstuaryHttpClient.uploadImageToCharacter()` sends a unique `Idempotency-Key` with each image and reuses it for up to three attempts when the network fails or the gateway returns 429, 502, 503, or 504. It honors `Retry-After` on 429 responses. A 409 means the original upload is still in progress and stops automatic retries.
+
+On a transient failure, catch `ImageUploadFailedError`. Save its `idempotency_key` alongside the image and pass it back with the same image to resume safely:
+
+```typescript
+import { EstuaryHttpClient, ImageUploadFailedError } from './Estuary/Core/EstuaryHttpClient';
+
+try {
+    await httpClient.uploadImageToCharacter(imageBase64, 'image/jpeg');
+} catch (error) {
+    if (error instanceof ImageUploadFailedError) {
+        // Persist error.idempotency_key with this image before offering a later retry.
+    }
+}
+
+// On a later retry, use the saved image and saved key together.
+await httpClient.uploadImageToCharacter(imageBase64, 'image/jpeg', {
+    _idempotencyKeyOverride: savedKey,
+});
+```
+
 ## Requirements
 
 - Lens Studio 5.0 or later
@@ -278,8 +301,6 @@ const samples = decodeAudio(base64);
 ## License
 
 MIT License - see [LICENSE](LICENSE) for details.
-
-
 
 
 

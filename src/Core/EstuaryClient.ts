@@ -94,11 +94,14 @@ interface AuthenticateData {
 
 /**
  * Per-session capability declaration (SDK_CONTRACT §Connection > capabilities).
- * Device fields are omitted here — the server defaults them to true, which is
- * correct for Spectacles. Only the protocol opt-in is declared.
+ * Spectacles explicitly declares its camera, microphone and speaker alongside
+ * the typed client_action protocol opt-in.
  */
 interface SessionCapabilities {
-    version?: string;
+    version: string;
+    camera: boolean;
+    microphone: boolean;
+    speaker: boolean;
     /** This build understands typed `client_action` events (contract v1.10).
      *  Server default is FALSE when absent, unlike the device fields. */
     client_action?: boolean;
@@ -615,13 +618,13 @@ export class EstuaryClient extends EventEmitter<any> {
             character_id: this._config.characterId,
             player_id: this._config.playerId,
             audio_sample_rate: this._config.playbackSampleRate || 24000,  // Default 24kHz for Spectacles
-            // Protocol opt-in, not a device declaration (SDK_CONTRACT v1.10).
-            // client_action is the one capability the server defaults to FALSE
-            // when absent: without it this session is served the retired XML
-            // <action> tag path and EstuaryActionManager never fires. Device
-            // fields stay omitted — the server defaults those to true, which is
-            // correct for Spectacles (camera, mic and speaker all present).
-            capabilities: { version: '1', client_action: true }
+            // This same auth object is sent on polling upgrades, direct WebSocket
+            // connections and reconnects. Keep client_action true to receive
+            // typed actions; it defaults to false when absent.
+            capabilities: {
+                version: '1', camera: true, microphone: true, speaker: true,
+                client_action: true
+            }
         };
 
         this.log(`Authenticating with player_id: ${this._config.playerId}`);
