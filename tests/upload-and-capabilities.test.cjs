@@ -31,7 +31,12 @@ function setup(responses) {
             callback({
                 statusCode: next.status,
                 body: next.body || '',
-                getHeader(name) { return next.headers?.[name] || ''; },
+                getHeader(name) {
+                    if (next.throwOnMissingHeader && !Object.hasOwn(next.headers || {}, name)) {
+                        throw new Error('HTTP header not found');
+                    }
+                    return next.headers?.[name] || '';
+                },
             });
         },
     });
@@ -111,6 +116,32 @@ test('429 honors Retry-After seconds and HTTP date, capped at 30 seconds', async
     ]);
     await client.uploadImageToCharacter('aW1hZ2U=', 'image/png');
     assert.deepEqual(delays, [2000, 30000]);
+});
+
+test('202 encounter succeeds when Snap throws for an absent Retry-After header', async () => {
+    const encounterId = 'encounter-123';
+    const { client, requests } = setup([{
+        status: 202,
+        body: JSON.stringify({ encounterId }),
+        throwOnMissingHeader: true,
+    }]);
+    const result = await client.startEncounter({
+        characterAId: 'character-a',
+        characterBId: 'character-b',
+        prompt: 'Debate lunch',
+    });
+    assert.deepEqual(result, { encounterId });
+    assert.equal(requests.length, 1);
+});
+
+test('429 without Retry-After uses bounded retry delay', async () => {
+    const { client, delays } = setup([
+        { status: 429, throwOnMissingHeader: true },
+        { status: 201, body: agent, throwOnMissingHeader: true },
+    ]);
+    assert.equal((await client.uploadImageToCharacter('aW1hZ2U=', 'image/png')).id, 'agent-1');
+    assert.equal(delays.length, 1);
+    assert.ok(delays[0] >= 750 && delays[0] <= 1250);
 });
 
 test('transport errors retry and keep the last observed HTTP status', async () => {

@@ -623,7 +623,14 @@ export class EstuaryHttpClient {
                     try {
                         const statusCode = response?.statusCode ?? 0;
                         const responseBody = response?.body || '';
-                        const retryAfter = typeof response?.getHeader === 'function' ? response.getHeader('Retry-After') : null;
+                        let retryAfter: string | null = null;
+                        if (statusCode === 429 && typeof response?.getHeader === 'function') {
+                            try {
+                                retryAfter = response.getHeader('Retry-After') || null;
+                            } catch {
+                                // Lens Studio throws when an optional header is absent.
+                            }
+                        }
                         settled = true;
                         resolve({ status: statusCode, body: responseBody, retryAfter });
                     } catch (error: any) {
