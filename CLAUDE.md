@@ -75,9 +75,7 @@ default_playback_sample_rate: 24000    # TTS audio generated at 24kHz
 
 ## Architecture
 
-Implemented scope and usage: [Conversation parity](docs/conversation-parity.md). Protocol regressions and Lens declaration type checks pass; Preview and device acceptance remain pending.
-
-Research and proposed delivery order: [Spectacles parity plan](docs/spectacles-parity-plan.md) (2026-09-26). It separates protocol gaps from platform constraints and records open compatibility checks; it is not evidence of hardware verification.
+Protocol regressions and Lens declaration type checks pass; Preview and device acceptance remain pending. The parity table above records implemented features, deferred work, and platform constraints.
 
 ```
 src/

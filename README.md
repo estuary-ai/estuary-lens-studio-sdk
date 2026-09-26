@@ -111,7 +111,7 @@ character.endVoiceSession();
 
 For push-to-talk, use `beginPushToTalk()` on press and `endPushToTalk()` on release. Reconnect to switch from PTT back to continuous voice. Dispose the microphone and character when the host is destroyed; the playback tracker follows character disposal.
 
-The default adapter plays audio and handles cancellation using the server's completion estimate. Exact completion reporting requires a verified native playout clock. See [conversation parity usage and limits](docs/conversation-parity.md).
+The default adapter plays audio and handles cancellation using the server's completion estimate. Exact completion reporting requires a verified native playout clock.
 
 ## Complete Examples
 
@@ -165,7 +165,7 @@ Connects `voiceReceived` to `DynamicAudioOutput`, cancels interrupted/redacted a
 
 ### EstuaryClipPlayer
 
-Connects `clientAction` to a native `AnimationPlayer`. It resolves exact clip names or a unique suffix such as `wave` → `preset:biped:wave`. See [rigged model usage](docs/conversation-parity.md#rigged-models-and-local-clips).
+Connects `clientAction` to a native `AnimationPlayer`. It resolves exact clip names or a unique suffix such as `wave` → `preset:biped:wave`.
 
 ## Audio Format
 
@@ -220,7 +220,7 @@ client.disconnect();
 
 ### Additional APIs
 
-See [conversation parity](docs/conversation-parity.md) for typed events, result cards, rigged generation, playback-clock requirements and legacy timer injection.
+Typed event models are exported from `src/Models/ConversationEvents.ts`. `Examples/ConversationResults.ts` shows result cards; `EstuaryHttpClient`, `EstuaryPlaybackTracker`, and `EstuaryClipPlayer` expose rigged generation, playback tracking, and local clip playback.
 
 ## Support
 
