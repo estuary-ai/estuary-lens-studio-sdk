@@ -13,32 +13,13 @@ TypeScript SDK for integrating Estuary AI characters with voice and text chat ca
 - **WebSocket Communication**: Built-in Socket.IO v4 protocol implementation
 - **TypeScript Support**: Full type definitions for Lens Studio development
 
-## Resilient image upload
-
-`EstuaryHttpClient.uploadImageToCharacter()` sends a unique `Idempotency-Key` with each image and reuses it for up to three attempts when the network fails or the gateway returns 429, 502, 503, or 504. It honors `Retry-After` on 429 responses. A 409 means the original upload is still in progress and stops automatic retries.
-
-On a transient failure, catch `ImageUploadFailedError`. Save its `idempotency_key` alongside the image and pass it back with the same image to resume safely:
-
-```typescript
-import { EstuaryHttpClient, ImageUploadFailedError } from './Estuary/Core/EstuaryHttpClient';
-
-try {
-    await httpClient.uploadImageToCharacter(imageBase64, 'image/jpeg');
-} catch (error) {
-    if (error instanceof ImageUploadFailedError) {
-        // Persist error.idempotency_key with this image before offering a later retry.
-    }
-}
-
-// On a later retry, use the saved image and saved key together.
-await httpClient.uploadImageToCharacter(imageBase64, 'image/jpeg', {
-    _idempotencyKeyOverride: savedKey,
-});
-```
+## Example Lenses
+- [Estuary Lens Studio template](https://github.com/estuary-ai/estuary-snap-spectacles-template)
+- [Character generation demo](https://github.com/estuary-ai/estuary-snap-spectacles-character-gen-demo)
 
 ## Requirements
 
-- Lens Studio 5.9+ target (minimum-runtime smoke testing remains pending)
+- Lens Studio 5.9+ target
 - Snap Spectacles; this SDK does not target mobile Snapchat lenses
 - An Estuary API key (get one at [app.estuary-ai.com](https://app.estuary-ai.com))
 
@@ -245,7 +226,7 @@ See [conversation parity](docs/conversation-parity.md) for typed events, result 
 
 - Documentation: [docs.estuary-ai.com](https://docs.estuary-ai.com)
 - Discord: [discord.gg/estuary](https://discord.gg/estuary)
-- Email: support@estuary-ai.com
+- Email: spencer@estuary-ai.com
 
 ## License
 
