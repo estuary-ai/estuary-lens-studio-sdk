@@ -30,6 +30,7 @@
  * No client-side vision intent detection is needed.
  */
 
+import { EstuaryPlaybackTracker } from '../src/Components/EstuaryPlaybackTracker';
 import { EstuaryCharacter } from '../src/Components/EstuaryCharacter';
 import { EstuaryMicrophone, MicrophoneRecorder } from '../src/Components/EstuaryMicrophone';
 import { EstuaryCredentials, IEstuaryCredentials, getCredentialsFromSceneObject } from '../src/Components/EstuaryCredentials';
@@ -127,6 +128,10 @@ export class EstuaryVoiceConnection extends BaseScriptComponent {
     private microphone: EstuaryMicrophone | null = null;
     private actionManager: EstuaryActionManager | null = null;
     private dynamicAudioOutput: DynamicAudioOutput | null = null;
+    private playbackTracker: EstuaryPlaybackTracker | null = null;
+
+    /** Enable only after validating AudioComponent.position with dynamic audio on your target runtime. */
+    public reportVerifiedPlaybackCompletion: boolean = false;
     private audioComponent: AudioComponent | null = null;
     private _outputVolume: number = 1.0;
     private playerId: string = "";
@@ -258,6 +263,7 @@ export class EstuaryVoiceConnection extends BaseScriptComponent {
     }
     
     onDestroy() {
+        this.playbackTracker?.dispose();
         this.disconnect();
     }
 
@@ -394,11 +400,9 @@ export class EstuaryVoiceConnection extends BaseScriptComponent {
             // handshake completes, all package scripts will have initialised.
             this.discoverHardwareComponents();
             
-            // Start voice session FIRST - this enables audio streaming
+            // The character starts its mic after the server confirms STT readiness.
             this.character!.startVoiceSession();
-            
-            // Then start mic streaming
-            this.startMicStream();
+
         });
         
         // Disconnected - show obvious log
@@ -449,41 +453,17 @@ export class EstuaryVoiceConnection extends BaseScriptComponent {
                 this.log(`Voice audio received: ${voice.audio?.length || 0} chars base64, chunk ${voice.chunkIndex}`);
             }
 
-            // Play audio using DynamicAudioOutput (hardware-compatible)
-            if (this.dynamicAudioOutput && voice.audio && voice.audio.length > 0) {
-                // Decode base64 to PCM16 bytes using native Lens Studio Base64
-                const tDecodeStart = Date.now();
-                const pcmBytes = Base64.decode(voice.audio);
-                const decodeMs = Date.now() - tDecodeStart;
-
-                const tAddStart = Date.now();
-                this.dynamicAudioOutput.addAudioFrame(pcmBytes, 1);
-                const addMs = Date.now() - tAddStart;
-
-                // Rolling stats — a suspiciously-long addMs here is our smoking gun
-                // for the native ring-buffer-back-pressure hypothesis.
-                this._diagB64DecodeSumMs += decodeMs;
-                if (decodeMs > this._diagB64DecodeMaxMs) this._diagB64DecodeMaxMs = decodeMs;
-                this._diagAddFrameSumMs += addMs;
-                if (addMs > this._diagAddFrameMaxMs) this._diagAddFrameMaxMs = addMs;
-            }
-
+            // EstuaryPlaybackTracker owns playback and scoped interruption.
             const listenerMs = Date.now() - tListenerStart;
             this._diagBotVoiceSumMs += listenerMs;
             if (listenerMs > this._diagBotVoiceMaxMs) this._diagBotVoiceMaxMs = listenerMs;
             this._diagBotVoiceCount++;
         });
         
-        // Handle interrupts - stop audio when user starts speaking
-        this.character.on('interrupt', () => {
-            // Record activity - user interrupted
-            this.recordActivity();
-            if (this.dynamicAudioOutput) {
-                this.dynamicAudioOutput.interruptAudioOutput();
-                this.log("Audio interrupted");
-            }
-        });
-        
+        this.character.on('interrupt', () => this.recordActivity());
+        this.character.on('sessionRejected', () => { this.sessionEnded = true; });
+        this.character.on('moderationWarning', data => { if (data.level === 'terminated') this.sessionEnded = true; });
+
         // STT from Deepgram
         this.character.on('transcript', (stt: SttResponse) => {
             // Record activity - user is speaking
@@ -514,6 +494,32 @@ export class EstuaryVoiceConnection extends BaseScriptComponent {
         // Audio output: persistent hardware, discover once
         if (!this.dynamicAudioOutput) {
             this.discoverDynamicAudioOutput();
+        }
+        this.playbackTracker?.dispose();
+        this.playbackTracker = null;
+        if (this.dynamicAudioOutput && this.character) {
+            const audio = this.dynamicAudioOutputObject.getComponent('Component.AudioComponent');
+            this.playbackTracker = new EstuaryPlaybackTracker(
+                this.character, {
+                    addAudioFrame: (bytes, channels) => {
+                        const start = Date.now();
+                        this.dynamicAudioOutput!.addAudioFrame(bytes, channels);
+                        const elapsed = Date.now() - start;
+                        this._diagAddFrameSumMs += elapsed;
+                        this._diagAddFrameMaxMs = Math.max(this._diagAddFrameMaxMs, elapsed);
+                    },
+                    interruptAudioOutput: () => this.dynamicAudioOutput!.interruptAudioOutput(),
+                },
+                this.reportVerifiedPlaybackCompletion && audio ? () => audio.position : undefined,
+                value => {
+                    const start = Date.now();
+                    const bytes = Base64.decode(value);
+                    const elapsed = Date.now() - start;
+                    this._diagB64DecodeSumMs += elapsed;
+                    this._diagB64DecodeMaxMs = Math.max(this._diagB64DecodeMaxMs, elapsed);
+                    return bytes;
+                },
+            );
         }
         // Mic: full discovery on first connect, reuse cached recorder on reconnect.
         // setMicrophoneRecorder adds an onAudioFrame listener each time, but old
@@ -702,17 +708,11 @@ export class EstuaryVoiceConnection extends BaseScriptComponent {
         }
     }
     
-    private startMicStream(): void {
-        if (this.microphone) {
-            this.microphone.startRecording();
-            this.log("Mic streaming started");
-        }
-    }
-    
     // ==================== Update Loop ====================
     
     private onUpdate(): void {
         const tOnUpdateStart = Date.now();
+        this.playbackTracker?.tick();
 
         // MicrophoneRecorder (RSG path) uses event-based delivery, no per-frame pull needed.
         // DynamicAudioOutput handles audio playback internally via native AudioComponent.
@@ -762,7 +762,7 @@ export class EstuaryVoiceConnection extends BaseScriptComponent {
             `onUpdate=${avgOnUpdate}ms max=${this._diagOnUpdateMaxMs} ` +
             `pullAudio=${avgPull}ms max=${this._diagPullAudioMaxMs} ` +
             `tickInner=${avgTick}ms max=${this._diagTickInnerMaxMs} | ` +
-            `voiceRx=${voiceCount} total=${this._diagBotVoiceSumMs}ms avg=${avgVoice}ms ` +
+            `voiceRx=${voiceCount} listener_total=${this._diagBotVoiceSumMs}ms avg=${avgVoice}ms ` +
             `max=${this._diagBotVoiceMaxMs} decode_avg=${avgDecode}ms decode_max=${this._diagB64DecodeMaxMs} ` +
             `addFrame_avg=${avgAdd}ms addFrame_max=${this._diagAddFrameMaxMs}`
         );
@@ -884,7 +884,7 @@ export class EstuaryVoiceConnection extends BaseScriptComponent {
             this.resumeVoice();
             return this.isMuted;
         }
-        if (this.microphone) {
+        if (this.microphone && this.character?.isVoiceSessionActive) {
             this.microphone.toggleRecording();
             const muted = !this.microphone.isRecording;
             print(`[EstuaryVoiceConnection] Mic ${muted ? 'MUTED' : 'UNMUTED'}`);
@@ -903,7 +903,7 @@ export class EstuaryVoiceConnection extends BaseScriptComponent {
         if (!this.microphone) return;
         if (muted && this.microphone.isRecording) {
             this.microphone.stopRecording();
-        } else if (!muted && !this.microphone.isRecording) {
+        } else if (!muted && !this.microphone.isRecording && this.character?.isVoiceSessionActive) {
             this.microphone.startRecording();
         }
     }

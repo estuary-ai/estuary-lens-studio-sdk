@@ -19,16 +19,21 @@ import { BotVoice } from '../Models/BotVoice';
 import { SttResponse } from '../Models/SttResponse';
 import { InterruptData } from '../Models/InterruptData';
 import { ClientActionEvent } from '../Models/ClientAction';
+import { ConversationEvent, ConversationPayloads, ConversationEventHandlers, ModerationFlag, VoiceMode } from '../Models/ConversationEvents';
 
 /**
  * Event types for EstuaryCharacter
  */
-export interface EstuaryCharacterEvents {
+export interface EstuaryCharacterEvents extends ConversationEventHandlers {
     connected: (sessionInfo: SessionInfo) => void;
     disconnected: () => void;
     botResponse: (response: BotResponse) => void;
     clientAction: (action: ClientActionEvent) => void;
     voiceReceived: (voice: BotVoice) => void;
+    voiceStarted: () => void;
+    voiceError: (data: { error: string }) => void;
+    responseRedacted: (flag: ModerationFlag) => void;
+    disposed: () => void;
     transcript: (response: SttResponse) => void;
     interrupt: (data: InterruptData) => void;
     error: (error: string) => void;
@@ -44,7 +49,7 @@ export interface EstuaryCharacterEvents {
  * and use DynamicAudioOutput from RemoteServiceGateway.lspkg.
  */
 export class EstuaryCharacter 
-    extends EventEmitter<any> 
+    extends EventEmitter<EstuaryCharacterEvents>
     implements IEstuaryCharacterHandler {
 
     // ==================== Configuration ====================
@@ -91,6 +96,13 @@ export class EstuaryCharacter
 
     /** The message ID that was interrupted (for filtering late-arriving audio) */
     private _interruptedMessageId: string = '';
+    private _blockedMessageIds = new Set<string>();
+    private _partialMessageId = '';
+    private _voiceMode: VoiceMode = 'continuous';
+    private _voiceStartPending = false;
+    private _voiceReleasePending = false;
+    private _voiceStopPending = false;
+    private _voiceRestartRequested: VoiceMode | null = null;
 
     /** Counter for streamed audio chunks (diagnostic) */
     private _audioStreamCount: number = 0;
@@ -217,7 +229,7 @@ export class EstuaryCharacter
      * Send a text message to this character.
      * @param message The message to send
      */
-    sendText(message: string): void {
+    sendText(message: string, textOnly?: boolean): void {
         if (!this._isConnected) {
             print(`[EstuaryCharacter] Cannot send text: not connected`);
             return;
@@ -232,7 +244,7 @@ export class EstuaryCharacter
         this._currentPartialResponse = '';
         this._currentMessageId = '';
 
-        EstuaryManager.instance.sendText(message);
+        EstuaryManager.instance.sendText(message, textOnly);
     }
 
     /**
@@ -254,47 +266,85 @@ export class EstuaryCharacter
     /**
      * Start a voice session for this character.
      */
-    startVoiceSession(): void {
-        if (!this._isConnected) {
-            print(`[EstuaryCharacter] Cannot start voice session: not connected`);
+    startVoiceSession(mode: VoiceMode = this._voiceMode): void {
+        if (!this._isConnected || this._serverEndedSession || this._isVoiceSessionActive) return;
+        if (this._voiceMode === 'push_to_talk' && mode === 'continuous') {
+            throw new Error('Push-to-talk lasts for the session. Reconnect to use continuous voice.');
+        }
+        if (this._voiceStartPending) {
+            if (this._voiceReleasePending) this._voiceRestartRequested = mode;
             return;
         }
-
-        this._isVoiceSessionActive = true;
+        if (this._voiceStopPending) { this._voiceRestartRequested = mode; return; }
+        this._voiceMode = mode;
+        this._voiceStartPending = true;
+        this._voiceReleasePending = false;
         this._voiceSessionWarningLogged = false;
         this._audioStreamCount = 0;
-        this._currentPartialResponse = '';
-        this._currentMessageId = '';
-
-        // Tell server to start voice mode (enables Deepgram STT)
-        EstuaryManager.instance.startVoiceMode();
-
-        print(`[EstuaryCharacter] Voice session started for ${this._characterId}, microphone=${!!this._microphone}`);
-        if (!this._microphone) {
-            print(`[EstuaryCharacter] WARNING: No microphone set — call character.microphone = mic before startVoiceSession()`);
-        }
-
-        // Start microphone if available
-        if (this._microphone) {
-            this._microphone.startRecording();
-        }
+        EstuaryManager.instance.startVoiceMode(mode);
+        // Capture starts only after voice_started: the gateway may be opening STT asynchronously.
     }
 
-    /**
-     * End the current voice session.
-     */
-    endVoiceSession(): void {
-        this._isVoiceSessionActive = false;
+    /** Press/release entry points for an app's button or pinch interaction. */
+    beginPushToTalk(): void { this.startVoiceSession('push_to_talk'); }
+    endPushToTalk(): void { this.endVoiceSession(); }
 
-        // Tell server to stop voice mode (saves STT costs)
-        EstuaryManager.instance.stopVoiceMode();
-
-        print(`[EstuaryCharacter] Voice session ended for ${this._characterId}`);
-
-        // Stop microphone if available
-        if (this._microphone) {
-            this._microphone.stopRecording();
+    handleVoiceStarted(_data: any): void {
+        if (!this._voiceStartPending) return;
+        this._voiceStartPending = false;
+        if (this._voiceReleasePending) {
+            this._voiceReleasePending = false;
+            this.requestVoiceStop();
+            return;
         }
+        this._isVoiceSessionActive = true;
+        this._microphone?.startRecording();
+        this.emit('voiceStarted');
+    }
+
+    handleVoiceError(data: any): void {
+        this.stopLocalVoice();
+        this.emit('voiceError', data);
+    }
+
+    endVoiceSession(): void {
+        this._voiceRestartRequested = null;
+        if (this._voiceStartPending) {
+            this._voiceReleasePending = true;
+            return;
+        }
+        if (!this._isVoiceSessionActive) return;
+        // stopRecording flushes the speech tail while streamAudio still accepts it.
+        this._microphone?.stopRecording();
+        this._isVoiceSessionActive = false;
+        this.requestVoiceStop();
+    }
+
+    private requestVoiceStop(): void {
+        this._voiceStopPending = true;
+        EstuaryManager.instance.stopVoiceMode();
+    }
+
+    handleVoiceStopped(): void {
+        this._voiceStopPending = false;
+        const next = this._voiceRestartRequested;
+        this._voiceRestartRequested = null;
+        if (next) this.startVoiceSession(next);
+    }
+
+    /** Report a verified device playout completion, never text completion. */
+    notifyAudioPlaybackComplete(messageId?: string): void {
+        if (messageId && this._blockedMessageIds.has(messageId)) return;
+        EstuaryManager.instance.notifyAudioPlaybackComplete(messageId);
+    }
+
+    private stopLocalVoice(): void {
+        this._voiceStartPending = false;
+        this._voiceReleasePending = false;
+        this._voiceStopPending = false;
+        this._voiceRestartRequested = null;
+        this._isVoiceSessionActive = false;
+        this._microphone?.stopRecording(false);
     }
 
     /**
@@ -308,15 +358,7 @@ export class EstuaryCharacter
      * restart voice on unmute).
      */
     handleVoiceTimeout(data: any): void {
-        this._isVoiceSessionActive = false;
-
-        print(`[EstuaryCharacter] Voice released by server after inactivity — mic stopped, socket stays connected`);
-
-        // Stop microphone if available
-        if (this._microphone) {
-            this._microphone.stopRecording();
-        }
-
+        this.stopLocalVoice();
         this.emit('voiceTimeout', data);
     }
 
@@ -354,6 +396,7 @@ export class EstuaryCharacter
         // Store the current message ID as interrupted so late-arriving audio is filtered
         if (this._currentMessageId) {
             this._interruptedMessageId = this._currentMessageId;
+            this._blockedMessageIds.add(this._currentMessageId);
         }
 
         // Notify server so it halts text/TTS generation for this message.
@@ -372,6 +415,8 @@ export class EstuaryCharacter
      * Clean up resources.
      */
     dispose(): void {
+        this.stopLocalVoice();
+        this.emit('disposed');
         EstuaryManager.instance.unregisterCharacter(this);
         this.removeAllListeners();
     }
@@ -381,6 +426,16 @@ export class EstuaryCharacter
     handleSessionConnected(sessionInfo: SessionInfo): void {
         this._isConnected = true;
         this._currentSession = sessionInfo;
+        this._blockedMessageIds.clear();
+        this._interruptedMessageId = '';
+        this._partialMessageId = '';
+        this._currentPartialResponse = '';
+        this._currentMessageId = '';
+        this._voiceMode = 'continuous';
+        this._voiceStartPending = false;
+        this._voiceReleasePending = false;
+        this._voiceStopPending = false;
+        this._voiceRestartRequested = null;
 
         print(`[EstuaryCharacter] Connected: ${JSON.stringify(sessionInfo)}`);
 
@@ -390,7 +445,7 @@ export class EstuaryCharacter
     handleDisconnected(reason: string): void {
         this._isConnected = false;
         this._currentSession = null;
-        this._isVoiceSessionActive = false;
+        this.stopLocalVoice();
 
         print(`[EstuaryCharacter] Disconnected: ${reason}`);
 
@@ -413,39 +468,39 @@ export class EstuaryCharacter
      */
     handleSessionTimeout(data: any): void {
         this._serverEndedSession = true;
-        this._isVoiceSessionActive = false;
-
-        print(`[EstuaryCharacter] Session ended by server for inactivity — will not auto-reconnect`);
-
-        // Stop microphone if available
-        if (this._microphone) {
-            this._microphone.stopRecording();
-        }
-
+        this.stopLocalVoice();
         this.emit('sessionTimeout', data);
     }
 
+    handleConversationEvent<K extends ConversationEvent>(event: K, data: ConversationPayloads[K]): void {
+        if (event === 'apiEndpointResult' && (this._serverEndedSession || this._blockedMessageIds.has((data as ConversationPayloads['apiEndpointResult']).message_id))) return;
+        if (event === 'sessionRejected' || (event === 'moderationWarning' && (data as ConversationPayloads['moderationWarning']).level === 'terminated')) {
+            this._serverEndedSession = true;
+            this.stopLocalVoice();
+        }
+        if (event === 'moderationFlag') {
+            const flag = data as ModerationFlag;
+            this._blockedMessageIds.add(flag.message_id);
+            if (flag.message_id === this._partialMessageId) this._currentPartialResponse = flag.message;
+            this.emit('interrupt', { messageId: flag.message_id, reason: 'moderation', interruptedAt: '' });
+            this.emit('responseRedacted', flag);
+        }
+        this.emit(event, data);
+    }
+
     handleBotResponse(response: BotResponse): void {
-        // Track message ID and clear interrupted state for new messages
-        if (response.messageId) {
-            // If this is a new message, clear the interrupted message ID
-            if (this._currentMessageId !== response.messageId) {
-                this._interruptedMessageId = '';
-            }
-            this._currentMessageId = response.messageId;
+        if (this._serverEndedSession || this._blockedMessageIds.has(response.messageId)) return;
+        if (response.messageId && response.messageId !== this._partialMessageId) {
+            this._currentPartialResponse = '';
+            this._partialMessageId = response.messageId;
         }
-
-        // Handle streaming responses
-        if (response.isFinal) {
-            this._currentPartialResponse = response.text;
-        } else {
-            this._currentPartialResponse += response.text;
-        }
-
+        if (response.messageId) this._currentMessageId = response.messageId;
+        this._currentPartialResponse = response.isFinal ? response.text : this._currentPartialResponse + response.text;
         this.emit('botResponse', response);
     }
 
     handleClientAction(action: ClientActionEvent): void {
+        if (this._serverEndedSession || this._blockedMessageIds.has(action.messageId)) return;
         // Typed in-world action call (client_action, contract v1.9).
         // Re-emit for listeners — EstuaryActionManager subscribes here and
         // dispatches through the same actionTriggered / action:{name} events
@@ -454,19 +509,8 @@ export class EstuaryCharacter
     }
 
     handleBotVoice(voice: BotVoice): void {
-        // Filter out audio for interrupted messages
-        if (this._interruptedMessageId && voice.messageId === this._interruptedMessageId) {
-            // This audio belongs to an interrupted message - discard it
-            return;
-        }
-
-        // If this is a new message, clear the interrupted state
-        if (voice.messageId && this._currentMessageId !== voice.messageId) {
-            this._interruptedMessageId = '';
-            this._currentMessageId = voice.messageId;
-        }
-
-        // Emit event for external handling (e.g., DynamicAudioOutput)
+        if (this._serverEndedSession || this._blockedMessageIds.has(voice.messageId)) return;
+        if (voice.messageId) this._currentMessageId = voice.messageId;
         this.emit('voiceReceived', voice);
     }
 
@@ -475,17 +519,12 @@ export class EstuaryCharacter
     }
 
     handleInterrupt(data: InterruptData): void {
-        // Store the interrupted message ID so we can filter late-arriving audio
-        if (data.messageId) {
-            this._interruptedMessageId = data.messageId;
-        } else if (this._currentMessageId) {
-            // If no messageId in interrupt data, use the current message ID
-            this._interruptedMessageId = this._currentMessageId;
-        }
-        
-        this._currentPartialResponse = '';
-        this._currentMessageId = '';
-        this.emit('interrupt', data);
+        const id = data.messageId || this._currentMessageId;
+        if (id) this._blockedMessageIds.add(id);
+        this._interruptedMessageId = id;
+        if (!id || id === this._currentMessageId) this._currentMessageId = '';
+        if (!id || id === this._partialMessageId) this._currentPartialResponse = '';
+        this.emit('interrupt', { ...data, messageId: id });
     }
 
     handleError(error: string): void {
@@ -522,5 +561,5 @@ export class EstuaryCharacter
  */
 export interface IEstuaryMicrophoneController {
     startRecording(): void;
-    stopRecording(): void;
+    stopRecording(flushPending?: boolean): void;
 }

@@ -2,6 +2,7 @@
  * Event types and connection states for Estuary SDK.
  */
 
+import { ConversationEventHandlers } from '../Models/ConversationEvents';
 import { SessionInfo } from '../Models/SessionInfo';
 import { BotResponse } from '../Models/BotResponse';
 import { BotVoice } from '../Models/BotVoice';
@@ -65,7 +66,7 @@ export type CameraCaptureRequestHandler = (request: CameraCaptureRequest) => voi
  * Simple event emitter for Estuary SDK.
  * Provides type-safe event subscription and emission.
  */
-export class EventEmitter<T extends { [key: string]: (...args: any[]) => void }> {
+export class EventEmitter<T extends { [K in keyof T]: (...args: any[]) => void }> {
     private listeners: Map<string, Set<Function>> = new Map();
 
     /**
@@ -73,6 +74,8 @@ export class EventEmitter<T extends { [key: string]: (...args: any[]) => void }>
      * @param event Event name
      * @param handler Event handler function
      */
+    on<K extends keyof T & string>(event: K, handler: T[K]): void;
+    on(event: string, handler: Function): void;
     on(event: string, handler: Function): void {
         if (!this.listeners.has(event)) {
             this.listeners.set(event, new Set());
@@ -134,7 +137,7 @@ export class EventEmitter<T extends { [key: string]: (...args: any[]) => void }>
 /**
  * Estuary client event map for type-safe event handling.
  */
-export interface EstuaryClientEvents {
+export interface EstuaryClientEvents extends ConversationEventHandlers {
     sessionConnected: SessionConnectedHandler;
     disconnected: DisconnectedHandler;
     botResponse: BotResponseHandler;

@@ -423,7 +423,7 @@ export class EstuaryMicrophone
     /**
      * Stop recording from the microphone.
      */
-    stopRecording(): void {
+    stopRecording(flushPending: boolean = true): void {
         if (!this._isRecording) {
             return;
         }
@@ -439,7 +439,7 @@ export class EstuaryMicrophone
         }
 
         // Flush any remaining buffered audio so the tail end of speech isn't lost
-        if (this._pendingAudioBuffer && this._pendingAudioBuffer.length > 0 && this._targetCharacter?.isConnected) {
+        if (flushPending && this._pendingAudioBuffer && this._pendingAudioBuffer.length > 0 && this._targetCharacter?.isConnected) {
             const chunk = this._pendingAudioBuffer;
             this._pendingAudioBuffer = null;
             const pcmBytes = floatToPCM16(chunk);

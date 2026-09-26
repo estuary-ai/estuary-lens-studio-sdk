@@ -2,6 +2,10 @@
 
 Research date: 2026-09-26. Baseline: SDK contract 1.29 and Lens SDK commit `0f7dc5a`. This is a source review and implementation proposal; it does not certify behavior on Spectacles hardware.
 
+## Delivery update (2026-09-26)
+
+Conversation/event handling, PTT, optional playback tracking, local clips, rigged-model handling and timer compatibility are implemented; see [usage and verification](conversation-parity.md). The user explicitly deferred scene graphs, device pose and continuous video and excluded auth-path changes. The later spatial/auth phases below remain research proposals. Playback-clock and other hardware acceptance checks remain pending.
+
 ## Recommendation
 
 Target complete conversational behavior on Spectacles: reliable sessions, continuous voice and true push-to-talk, correct audio completion and interruption, camera requests, and accessible typed events for everything a character returns. Add spatial context and local character animations as optional modules. Keep continuous vision and streamed facial/body animation behind explicit opt-ins and device performance gates.

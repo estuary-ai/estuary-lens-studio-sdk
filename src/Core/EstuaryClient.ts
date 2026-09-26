@@ -13,6 +13,7 @@
 
 import { 
     ConnectionState, 
+    EstuaryClientEvents,
     EventEmitter
 } from './EstuaryEvents';
 import { 
@@ -29,6 +30,7 @@ import { parseEncounterMessage } from '../Models/EncounterMessage';
 import { parseEncounterVoice } from '../Models/EncounterVoice';
 import { parseEncounterEnd } from '../Models/EncounterEnd';
 import { parseClientAction } from '../Models/ClientAction';
+import { conversationWireEvents, isConversationPayload, VoiceMode } from '../Models/ConversationEvents';
 
 /** Socket.IO namespace for SDK connections */
 const SDK_NAMESPACE = '/sdk';
@@ -112,6 +114,7 @@ interface SessionCapabilities {
  */
 interface TextPayload {
     text: string;
+    textOnly?: boolean;
 }
 
 /**
@@ -144,7 +147,7 @@ interface CameraImagePayload {
  * Estuary WebSocket client for Lens Studio.
  * Implements Socket.IO v4 protocol using Lens Studio's WebSocket API.
  */
-export class EstuaryClient extends EventEmitter<any> {
+export class EstuaryClient extends EventEmitter<EstuaryClientEvents> {
     private _config: Required<EstuaryConfig>;
     private _state: ConnectionState = ConnectionState.Disconnected;
     private _currentSession: SessionInfo | null = null;
@@ -154,6 +157,7 @@ export class EstuaryClient extends EventEmitter<any> {
     // Set by session_timeout: suppresses autoReconnect for the
     // server-initiated close that immediately follows it.
     private _serverEndedSession: boolean = false;
+    private _voiceMode: VoiceMode = 'continuous';
     private _namespace: string = SDK_NAMESPACE;
     private _auth: AuthenticateData | null = null;
     private _connectStartMs: number | null = null;
@@ -308,13 +312,13 @@ export class EstuaryClient extends EventEmitter<any> {
      * Send a text message to the character.
      * @param text The message text
      */
-    sendText(text: string): void {
+    sendText(text: string, textOnly?: boolean): void {
         if (!this.isConnected) {
             this.logError('Cannot send text: not connected');
             return;
         }
 
-        const payload: TextPayload = { text };
+        const payload: TextPayload = textOnly === undefined ? { text } : { text, textOnly };
         this.emitSocketEvent('text', payload);
         this.log(`Sent text: ${text}`);
     }
@@ -416,13 +420,13 @@ export class EstuaryClient extends EventEmitter<any> {
     /**
      * Notify the server that audio playback has completed.
      */
-    notifyAudioPlaybackComplete(): void {
+    notifyAudioPlaybackComplete(messageId?: string): void {
         if (!this.isConnected) {
             this.logError('Cannot notify playback complete: not connected');
             return;
         }
 
-        this.emitSocketEvent('audio_playback_complete', null);
+        this.emitSocketEvent('audio_playback_complete', messageId ? { message_id: messageId } : {});
         this.log('Notified audio playback complete');
     }
 
@@ -430,13 +434,17 @@ export class EstuaryClient extends EventEmitter<any> {
      * Start voice mode on the server (enables Deepgram STT).
      * Must be called before streaming audio for speech-to-text.
      */
-    startVoiceMode(): void {
+    startVoiceMode(mode: VoiceMode = this._voiceMode): void {
         if (!this.isConnected) {
             this.logError('Cannot start voice mode: not connected');
             return;
         }
 
-        this.emitSocketEvent('start_voice', null);
+        if (this._voiceMode === 'push_to_talk' && mode === 'continuous') {
+            throw new Error('Reconnect before switching from push-to-talk to continuous voice.');
+        }
+        this._voiceMode = mode;
+        this.emitSocketEvent('start_voice', mode === 'push_to_talk' ? { turn_mode: mode } : null);
         this.log('Requested server to start voice mode');
     }
 
@@ -899,7 +907,6 @@ export class EstuaryClient extends EventEmitter<any> {
         if (this._config.autoReconnect && !this._serverEndedSession) {
             this.handleReconnect();
         }
-        this._serverEndedSession = false;
     }
 
     private handleWebSocketError(error: string): void {
@@ -1052,6 +1059,20 @@ export class EstuaryClient extends EventEmitter<any> {
     }
 
     private handleServerEvent(eventName: string, data: any): void {
+        const event = Object.prototype.hasOwnProperty.call(conversationWireEvents, eventName)
+            ? conversationWireEvents[eventName] : undefined;
+        if (event) {
+            if (!isConversationPayload(event, data)) {
+                this.log(`Malformed ${eventName}, ignoring`);
+                return;
+            }
+            if (event === 'sessionRejected' || (event === 'moderationWarning' && data.level === 'terminated')) {
+                this._serverEndedSession = true;
+                this._sendQueue = [];
+            }
+            this.emit(event, data);
+            return;
+        }
         switch (eventName) {
             case 'session_info':
                 this.handleSessionInfo(data);
@@ -1074,9 +1095,6 @@ export class EstuaryClient extends EventEmitter<any> {
             case 'error':
                 this.handleServerError(data);
                 break;
-            case 'quota_exceeded':
-                this.handleQuotaExceeded(data);
-                break;
             case 'session_timeout':
                 this.handleSessionTimeout(data);
                 break;
@@ -1094,9 +1112,6 @@ export class EstuaryClient extends EventEmitter<any> {
                 break;
             case 'voice_stopped':
                 this.handleVoiceStopped(data);
-                break;
-            case 'memory_updated':
-                this.handleMemoryUpdated(data);
                 break;
             case 'encounter_message':
                 this.handleEncounterMessage(data);
@@ -1160,15 +1175,6 @@ export class EstuaryClient extends EventEmitter<any> {
         this.emit('clientAction', action);
     }
 
-    private handleMemoryUpdated(data: any): void {
-        // Pass through to listeners — `new_memories` entries use camelCase per SDK_CONTRACT.md.
-        // Consumers that want strongly-typed access should define their own model; this handler
-        // intentionally forwards the raw payload to avoid enforcing a schema the server owns.
-        const memoriesCount =
-            (data && (data.memories_extracted ?? data.memoriesExtracted)) || 0;
-        this.log(`Memory updated: ${memoriesCount} memor${memoriesCount === 1 ? 'y' : 'ies'} extracted`);
-        this.emit('memoryUpdated', data);
-    }
 
     private handleSessionInfo(data: any): void {
         try {
@@ -1179,6 +1185,7 @@ export class EstuaryClient extends EventEmitter<any> {
             }
             const sessionInfo = parseSessionInfo(data);
             this._currentSession = sessionInfo;
+            this._voiceMode = 'continuous';
             this.setState(ConnectionState.Connected);
             this.log(`Session established: ${JSON.stringify(sessionInfo)}`);
             this.emit('sessionConnected', sessionInfo);
@@ -1259,14 +1266,11 @@ export class EstuaryClient extends EventEmitter<any> {
 
     private handleServerError(data: any): void {
         const errorMsg = data?.message || data?.error || 'Server error';
+        this.emit('serverError', { ...data, message: errorMsg });
         this.logError(`Server error: ${errorMsg}`);
         this.emit('error', errorMsg);
     }
 
-    private handleQuotaExceeded(data: any): void {
-        const message = data?.message || 'API quota exceeded';
-        this.logError(`Quota exceeded: ${message}`);
-    }
 
     private handleSessionTimeout(data: any): void {
         const idleSeconds = data?.idle_seconds ?? '?';

@@ -40,8 +40,7 @@ export * from './Utilities/AudioConverter';
 
 // Version
 export const VERSION = '1.0.0';
-
-
-
-
-
+export * from './Models/ConversationEvents';
+export * from './Components/EstuaryPlaybackTracker';
+export * from './Components/EstuaryClipPlayer';
+export * from './Utilities/LensScheduler';

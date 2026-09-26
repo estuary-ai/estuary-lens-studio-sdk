@@ -1,26 +1,8 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const fs = require('node:fs');
+require('./register.cjs');
 const path = require('node:path');
 
-// The SDK is a Lens Studio package, so load its TypeScript without a build step.
-// In the deployment monorepo, reuse the frontend's TypeScript installation.
-let ts;
-try {
-    ts = require('typescript');
-} catch {
-    ts = require('../../estuary-frontend/node_modules/typescript');
-}
-require.extensions['.ts'] = (module, filename) => {
-    const source = fs.readFileSync(filename, 'utf8');
-    const output = ts.transpileModule(source, {
-        compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020, experimentalDecorators: true },
-        fileName: filename,
-    });
-    module._compile(output.outputText, filename);
-};
-
-global.print = () => {};
 const sourceRoot = process.env.ESTUARY_SDK_SOURCE || path.join(__dirname, '../src');
 const isDemoCopy = Boolean(process.env.ESTUARY_SDK_SOURCE);
 const { setInternetModule, EstuaryClient } = require(path.join(sourceRoot, 'Core/EstuaryClient.ts'));
@@ -170,4 +152,57 @@ test('namespace auth carries all Spectacles capabilities on upgrade and direct p
     }
     client.connectInternal();
     assert.deepEqual(client._auth.capabilities, auth.capabilities);
+});
+
+test('rigged generation uses the opt-in and preserves animation metadata', async () => {
+    const { client, requests } = setup([{ status: 202, body: JSON.stringify({ modelStatus: 'posing', rigged: true, animations: ['preset:biped:idle'] }) }]);
+    const result = await client.generateModel('agent-1', { rigged: true });
+    assert.deepEqual(JSON.parse(requests[0].body), { rigged: true });
+    assert.equal(result.rigged, true);
+    assert.deepEqual(result.animations, ['preset:biped:idle']);
+});
+
+test('default model generation stays static', async () => {
+    const { client, requests } = setup([{ status: 202, body: JSON.stringify({ modelStatus: 'generating' }) }]);
+    await client.generateModel('agent-1');
+    assert.deepEqual(JSON.parse(requests[0].body), {});
+});
+
+for (const status of ['rig_failed', 'animation_failed']) test(`${status} ends polling with its usable static model`, async () => {
+    const { client } = setup([{ status: 200, body: JSON.stringify({ modelStatus: status, modelUrl: 'https://cdn.example/model.glb', rigged: false }) }]);
+    const completed = [], errors = [], timers = [];
+    client.scheduleDelayedCallback = callback => timers.push(callback);
+    client.pollModelStatus('agent', () => {}, value => completed.push(value), value => errors.push(value));
+    await timers.shift()();
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(completed.length, 1);
+    assert.equal(completed[0].modelStatus, status);
+    assert.equal(errors.length, 0);
+    assert.equal(timers.length, 0);
+});
+
+test('a replaced model poll ignores the old in-flight response', async () => {
+    const { client } = setup([]);
+    const timers = [], completed = [];
+    let resolveOld;
+    client.scheduleDelayedCallback = callback => timers.push(callback);
+    client.getModelStatus = () => new Promise(resolve => { resolveOld = resolve; });
+    client.pollModelStatus('old', () => {}, value => completed.push(value), assert.fail);
+    timers.shift()();
+    client.pollModelStatus('new', () => {}, value => completed.push(value), assert.fail);
+    resolveOld({ modelStatus: 'completed', progress: 100 });
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(completed.length, 0);
+    assert.equal(client._pollActive, true);
+    client.stopPolling();
+});
+
+test('a status callback can cancel polling without receiving completion afterward', async () => {
+    const { client } = setup([{ status: 200, body: JSON.stringify({ modelStatus: 'completed', progress: 100 }) }]);
+    const timers = [];
+    client.scheduleDelayedCallback = callback => timers.push(callback);
+    client.pollModelStatus('agent', () => client.stopPolling(), () => assert.fail('cancelled'), assert.fail);
+    timers.shift()();
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(client._pollActive, false);
 });

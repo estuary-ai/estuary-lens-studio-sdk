@@ -9,6 +9,7 @@
  * JSON+base64 encoding.
  */
 
+import { DelayScheduler, CancelDelay, scheduleDelay } from '../Utilities/LensScheduler';
 import { EstuaryConfig } from './EstuaryConfig';
 import { getInternetModule } from './EstuaryClient';
 import { AgentResponse, parseAgentResponse } from '../Models/AgentResponse';
@@ -18,6 +19,7 @@ import {
     isModelCompleted,
     isModelFailed,
     isModelTextureFailed,
+    isModelPartialSuccess,
 } from '../Models/ModelStatusResponse';
 import { CharacterListResponse, parseCharacterListResponse } from '../Models/CharacterListResponse';
 
@@ -71,8 +73,13 @@ const UPLOAD_MAX_ATTEMPTS = 3;
 const RETRY_AFTER_CAP_MS = 30000;
 const UPLOAD_REQUEST_TIMEOUT_MS = 35000;
 
-/** Lens Studio has no crypto.randomUUID(). Math.random provides uniqueness, not cryptographic entropy. */
+/** Prefer native UUIDs; the fallback is only an idempotency identifier, never a credential. */
 function imageUploadKey(): string {
+    // @ts-ignore Available on newer Lens runtimes; feature-detected for older targets.
+    if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+        // @ts-ignore See above.
+        return crypto.randomUUID().replace(/-/g, '');
+    }
     let key = '';
     for (let i = 0; i < 32; i++) {
         const digit = i === 12 ? 4 : i === 16 ? 8 + Math.floor(Math.random() * 4) : Math.floor(Math.random() * 16);
@@ -119,8 +126,9 @@ export class EstuaryHttpClient {
 
     /** Whether polling is currently active */
     private _pollActive: boolean = false;
+    private _pollGeneration = 0;
 
-    constructor(config: EstuaryConfig) {
+    constructor(config: EstuaryConfig, private scheduler: DelayScheduler = scheduleDelay) {
         this.serverUrl = (config.serverUrl || '').replace(/\/$/, '');
         this.apiKey = config.apiKey || '';
         this.playerId = config.playerId || '';
@@ -234,9 +242,9 @@ export class EstuaryHttpClient {
      * @param agentId Agent UUID to generate model for
      * @returns The initial ModelStatusResponse with modelStatus "generating"
      */
-    async generateModel(agentId: string): Promise<ModelStatusResponse> {
+    async generateModel(agentId: string, options?: { rigged?: boolean }): Promise<ModelStatusResponse> {
         const url = this.getHttpBaseUrl() + '/api/v1/characters/' + agentId + '/model';
-        const body = JSON.stringify({});
+        const body = JSON.stringify(options?.rigged === undefined ? {} : { rigged: options.rigged });
 
         this.log(`Triggering model generation for agent ${agentId}`);
 
@@ -272,6 +280,7 @@ export class EstuaryHttpClient {
     ): void {
         this.stopPolling();
         this._pollActive = true;
+        const generation = this._pollGeneration;
 
         let intervalMs = initialIntervalMs;
         let lastStatus = '';
@@ -279,7 +288,7 @@ export class EstuaryHttpClient {
         const startTime = Date.now();
 
         const doPoll = async (): Promise<void> => {
-            if (!this._pollActive) {
+            if (!this._pollActive || generation !== this._pollGeneration) {
                 return;
             }
 
@@ -292,7 +301,7 @@ export class EstuaryHttpClient {
             try {
                 const status = await this.getModelStatus(agentId);
 
-                if (!this._pollActive) {
+                if (!this._pollActive || generation !== this._pollGeneration) {
                     return;
                 }
 
@@ -302,9 +311,11 @@ export class EstuaryHttpClient {
                     lastProgress = status.progress;
                     onStatusChanged(status);
                 }
+                // The application may cancel or replace polling from its status callback.
+                if (!this._pollActive || generation !== this._pollGeneration) return;
 
                 // Terminal states
-                if (isModelCompleted(status) || isModelTextureFailed(status)) {
+                if (isModelCompleted(status) || isModelTextureFailed(status) || isModelPartialSuccess(status)) {
                     this._pollActive = false;
                     onCompleted(status);
                     return;
@@ -321,7 +332,7 @@ export class EstuaryHttpClient {
                 this.scheduleDelayedCallback(() => { doPoll(); }, intervalMs);
 
             } catch (error: any) {
-                if (!this._pollActive) {
+                if (!this._pollActive || generation !== this._pollGeneration) {
                     return;
                 }
                 this._pollActive = false;
@@ -337,6 +348,7 @@ export class EstuaryHttpClient {
      * Stop any active model status polling.
      */
     stopPolling(): void {
+        this._pollGeneration++;
         this._pollActive = false;
     }
 
@@ -565,6 +577,7 @@ export class EstuaryHttpClient {
 
         return new Promise<{ status: number; body: string; retryAfter: string | null }>((resolve, reject) => {
             let settled = false;
+            let cancelTimeout: CancelDelay | void;
             try {
                 // @ts-ignore - Lens Studio global RemoteServiceHttpRequest
                 const request = RemoteServiceHttpRequest.create();
@@ -598,7 +611,7 @@ export class EstuaryHttpClient {
                 }
 
                 if (timeoutMs) {
-                    this.scheduleDelayedCallback(() => {
+                    cancelTimeout = this.scheduleDelayedCallback(() => {
                         if (!settled) {
                             settled = true;
                             reject(new Error(`HTTP request timed out after ${timeoutMs}ms`));
@@ -607,6 +620,7 @@ export class EstuaryHttpClient {
                 }
                 internetModule.performHttpRequest(request, (response: any) => {
                     if (settled) return;
+                    if (cancelTimeout) cancelTimeout();
                     try {
                         const statusCode = response?.statusCode ?? 0;
                         const responseBody = response?.body || '';
@@ -620,6 +634,7 @@ export class EstuaryHttpClient {
                     }
                 });
             } catch (error: any) {
+                if (cancelTimeout) cancelTimeout();
                 if (!settled) {
                     settled = true;
                     reject(new Error('HTTP request failed: ' + (error.message || String(error))));
@@ -647,12 +662,8 @@ export class EstuaryHttpClient {
     }
 
     /** Schedule on the Lens scripting thread (also works in Node tests). */
-    private scheduleDelayedCallback(callback: () => void, delayMs: number): void {
-        if (typeof setTimeout === 'function') {
-            setTimeout(callback, delayMs);
-        } else {
-            throw new Error('Lens Studio setTimeout is required for HTTP polling and upload retries');
-        }
+    private scheduleDelayedCallback(callback: () => void, delayMs: number): CancelDelay | void {
+        return this.scheduler(callback, delayMs);
     }
 
     /** Log a message if debug logging is enabled. */

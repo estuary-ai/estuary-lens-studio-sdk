@@ -5,6 +5,8 @@
 export interface ModelStatusResponse {
     /** Current model generation status */
     modelStatus: string;
+    rigged?: boolean;
+    animations?: string[];
     /** URL to the preview 3D model (GLB) */
     modelPreviewUrl: string | null;
     /** URL to the textured 3D model (GLB) */
@@ -20,6 +22,8 @@ export interface ModelStatusResponse {
  */
 interface ModelStatusResponseJson {
     modelStatus?: string;
+    rigged?: boolean;
+    animations?: string[];
     model_status?: string;
     modelPreviewUrl?: string;
     model_preview_url?: string;
@@ -36,6 +40,8 @@ interface ModelStatusResponseJson {
 export function parseModelStatusResponse(json: ModelStatusResponseJson): ModelStatusResponse {
     return {
         modelStatus: json.modelStatus || json.model_status || '',
+        rigged: json.rigged === true,
+        animations: Array.isArray(json.animations) ? json.animations.filter(name => typeof name === 'string') : [],
         modelPreviewUrl: json.modelPreviewUrl || json.model_preview_url || null,
         modelUrl: json.modelUrl || json.model_url || null,
         thumbnailUrl: json.thumbnailUrl || json.thumbnail_url || null,
@@ -47,7 +53,7 @@ export function parseModelStatusResponse(json: ModelStatusResponseJson): ModelSt
  * Check if the model is still being generated.
  */
 export function isModelInProgress(response: ModelStatusResponse): boolean {
-    return response.modelStatus === 'generating' || response.modelStatus === 'preview_ready';
+    return ['posing', 'generating', 'preview_ready', 'rig_checking', 'rigging', 'animating'].includes(response.modelStatus);
 }
 
 /**
@@ -61,7 +67,7 @@ export function isModelCompleted(response: ModelStatusResponse): boolean {
  * Check if the model generation failed completely.
  */
 export function isModelFailed(response: ModelStatusResponse): boolean {
-    return response.modelStatus === 'failed';
+    return response.modelStatus === 'failed' || (['rig_failed', 'animation_failed'].includes(response.modelStatus) && !response.modelUrl);
 }
 
 /**
@@ -76,4 +82,9 @@ export function isModelTextureFailed(response: ModelStatusResponse): boolean {
  */
 export function modelStatusResponseToString(response: ModelStatusResponse): string {
     return `ModelStatusResponse(Status=${response.modelStatus}, Progress=${response.progress}%, ModelUrl=${response.modelUrl || 'none'})`;
+}
+
+/** Rigging failures can still deliver a usable static model. */
+export function isModelPartialSuccess(response: ModelStatusResponse): boolean {
+    return ['rig_failed', 'animation_failed'].includes(response.modelStatus) && !!response.modelUrl;
 }
