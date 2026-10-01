@@ -31,6 +31,9 @@ default_playback_sample_rate: 24000    # TTS audio generated at 24kHz
 
 ## Parity Status
 
+Restricted client credentials: Pending (v1.31). Deferred by user decision; existing credentials and Spectacles send queue remain unchanged.
+
+
 | Feature | Status | Notes |
 |---------|--------|-------|
 | text_chat | Implemented | `sendText(text, textOnly?)` preserves the server default when omitted. Partial text resets per message ID; interrupted/redacted messages reject late text, audio and actions. |
