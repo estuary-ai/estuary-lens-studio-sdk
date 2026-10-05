@@ -32,6 +32,7 @@ default_playback_sample_rate: 24000    # TTS audio generated at 24kHz
 
 | Feature | Status | Notes |
 |---------|--------|-------|
+| guardrail_visibility | Not implemented | OPTIONAL contract v1.35 `guardrail_event` is safely ignored. Typed event forwarding awaits Spectacles validation. It must never clear approved audio/text or send an interrupt; history is exposed through the public character REST endpoint. |
 | text_chat | Implemented | Full parity |
 | say_line | Implemented | REQUIRED (contract v1.0, promoted from OPTIONAL 2026-06-06). `EstuaryClient.sayLine(text, textOnly?)` emits `say_line` with `text_only` flag |
 | voice_websocket | Implemented | Base64 PCM over WebSocket (only voice option) |
