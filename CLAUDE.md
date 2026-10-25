@@ -21,9 +21,6 @@ audio_recording: true                  # AudioTrackAsset, 16kHz mono only
 audio_playback: true                   # AudioTrackAsset, 16kHz mono only
 camera_capture: true                   # CameraModule — on-demand capture
 session_capabilities: true             # Auth declares camera, microphone, speaker, client_action
-livekit_video: false                   # No WebRTC, no LiveKit video
-scene_graph: true                      # Feasible; deferred until backend feature is ready
-device_pose: true                      # DeviceTracking module
 min_audio_sample_rate: 16000           # Recording: hardware-locked to 16kHz
 max_audio_sample_rate: 24000           # Playback: 24kHz preferred TTS default
 default_playback_sample_rate: 24000    # TTS audio generated at 24kHz
@@ -46,10 +43,6 @@ Restricted client credentials: Pending (v1.31). Deferred by user decision; exist
 | session_capabilities (SCRUM-142) | Implemented (Preview smoke pending) | Socket.IO namespace auth declares `{version: '1', camera: true, microphone: true, speaker: true, client_action: true}`. One auth object is sent on polling-first upgrade, direct WebSocket fallback, and reconnect. Spectacles does not send cookies on WebSocket; capabilities are in the namespace message body. |
 | audio_playback_tracking | Partial (verified-clock opt-in) | `EstuaryPlaybackTracker` integrates DynamicAudioOutput, final audio markers and per-message completion/cancellation. No completion is sent without an app-supplied verified playout clock. The voice example keeps server estimates by default; `AudioComponent.position` needs device validation. A shared native buffer may need a full flush on scoped redaction. |
 | vision_camera | Implemented | On-demand via CameraModule |
-| video_streaming_livekit | Not available | No WebRTC |
-| video_streaming_websocket | Deferred | Deferred by user while the world-model backend is unavailable; on-demand camera capture remains supported. |
-| scene_graph | Deferred | Feasible on Spectacles, but explicitly excluded until the backend feature is ready. |
-| device_pose | Deferred | Deferred by user with scene graphs and continuous video. The existing contract/handler matrix-shape mismatch remains unresolved; no sender was added. |
 | memory_push | Implemented | Typed `memoryUpdated` reaches client, manager and character; retains snake_case envelope and camelCase `new_memories` entries for compatibility. |
 | motive_push (v1.7) | Implemented (event only) | Typed `motiveUpdated` reaches client, manager and character. Motives are private owner/director data; do not automatically display them to players. Motive REST and simulation management remain outside the Lens surface. |
 | preferences | Deprecated (no-op) | Canonical contract corrected to match the gateway: `enableVisionAcknowledgment` is ignored. No ineffective preference setter was added. |
