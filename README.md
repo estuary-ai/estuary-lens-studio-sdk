@@ -5,16 +5,22 @@ TypeScript SDK for integrating Estuary AI characters with voice and text chat ca
 ## Features
 
 - **Text Chat**: Send text messages to AI characters and receive responses
-- **Voice Chat**: Real-time voice conversations with AI characters
+- **Voice Chat**: Continuous voice and server-buffered push-to-talk
+- **Conversation Events**: Typed quota, moderation, memory, delegation, result and timing events
+- **Generated Characters**: Optional rigged GLBs and local animation clips
 - **Streaming Responses**: Low-latency streaming text and audio responses
 - **Conversation Persistence**: Player conversations are automatically saved
 - **WebSocket Communication**: Built-in Socket.IO v4 protocol implementation
 - **TypeScript Support**: Full type definitions for Lens Studio development
 
+## Example Lenses
+- [Estuary Lens Studio template](https://github.com/estuary-ai/estuary-snap-spectacles-template)
+- [Character generation demo](https://github.com/estuary-ai/estuary-snap-spectacles-character-gen-demo)
+
 ## Requirements
 
-- Lens Studio 5.0 or later
-- Spectacles (5th Generation) for voice features
+- Lens Studio 5.9+ target
+- Snap Spectacles; this SDK does not target mobile Snapchat lenses
 - An Estuary API key (get one at [app.estuary-ai.com](https://app.estuary-ai.com))
 
 ## Installation
@@ -23,12 +29,6 @@ TypeScript SDK for integrating Estuary AI characters with voice and text chat ca
 
 1. Copy the `src` folder contents to your Lens Studio project's scripts directory
 2. Import the modules you need in your scripts
-
-### Via npm (for TypeScript projects)
-
-```bash
-npm install @estuary-ai/lens-studio-sdk
-```
 
 ## Quick Start
 
@@ -50,6 +50,10 @@ const config: EstuaryConfig = {
 
 ```typescript
 import { EstuaryCharacter } from './Estuary/Components/EstuaryCharacter';
+import { EstuaryManager } from './Estuary/Components/EstuaryManager';
+
+// internetModule is an InternetModule asset assigned to your host script.
+EstuaryManager.instance.internetModule = internetModule;
 
 const character = new EstuaryCharacter(
     'your-character-uuid',
@@ -74,80 +78,45 @@ character.initialize(config);
 ### 3. Send Messages
 
 ```typescript
-// Send text
+// Call after the connected event. Omit the flag to keep the server default.
 character.sendText('Hello, how are you?');
+character.sendText('Reply without speech', true);
 ```
 
 ### 4. Enable Voice Chat
 
+Add `MicrophoneRecorder` and `DynamicAudioOutput` from Snap's RemoteServiceGateway package to the scene. Pass those component instances to the SDK:
+
 ```typescript
-import { EstuaryAudioPlayer } from './Estuary/Components/EstuaryAudioPlayer';
 import { EstuaryMicrophone } from './Estuary/Components/EstuaryMicrophone';
+import { EstuaryPlaybackTracker } from './Estuary/Components/EstuaryPlaybackTracker';
 
-// Set up audio player for voice responses
-const audioPlayer = new EstuaryAudioPlayer(audioOutputControl);
-character.audioPlayer = audioPlayer;
-
-// Set up microphone for voice input
 const microphone = new EstuaryMicrophone(character);
-microphone.setAudioInput(audioInputControl);
+microphone.setMicrophoneRecorder(microphoneRecorder);
 character.microphone = microphone;
+const playback = new EstuaryPlaybackTracker(character, dynamicAudioOutput);
 
-// Start voice session
+// Start after connected. Capture begins after the server's voice_started event.
 character.startVoiceSession();
 
-// In your update loop
+// Call from the host script's UpdateEvent.
 function onUpdate() {
-    microphone.processAudioFrame(1024);
-    audioPlayer.processAudioFrame();
+    EstuaryManager.instance.tick();
+    playback.tick();
 }
 
-// End voice session
+// On user stop:
 character.endVoiceSession();
 ```
 
-## Complete Example
+For push-to-talk, use `beginPushToTalk()` on press and `endPushToTalk()` on release. Reconnect to switch from PTT back to continuous voice. Dispose the microphone and character when the host is destroyed; the playback tracker follows character disposal.
 
-See [Examples/VoiceChatExample.ts](Examples/VoiceChatExample.ts) for a complete implementation.
+The default adapter plays audio and handles cancellation using the server's completion estimate. Exact completion reporting requires a verified native playout clock.
 
-```typescript
-@component
-export class MyLens extends BaseScriptComponent {
-    @input audioOutput: AudioTrackAsset;
-    @input audioInput: AudioTrackAsset;
-    
-    private character: EstuaryCharacter;
-    private audioPlayer: EstuaryAudioPlayer;
-    private microphone: EstuaryMicrophone;
-    
-    onAwake() {
-        // Create and configure components
-        this.character = new EstuaryCharacter('char-id', 'player-id');
-        this.audioPlayer = new EstuaryAudioPlayer(this.audioOutput.control);
-        this.microphone = new EstuaryMicrophone(this.character);
-        
-        // Connect components
-        this.character.audioPlayer = this.audioPlayer;
-        this.character.microphone = this.microphone;
-        
-        // Subscribe to events
-        this.character.on('botResponse', (r) => print(`AI: ${r.text}`));
-        
-        // Initialize
-        this.character.initialize({
-            serverUrl: 'https://api.estuary-ai.com',
-            apiKey: 'your-key',
-            characterId: 'char-id',
-            playerId: 'player-id'
-        });
-    }
-    
-    onUpdate() {
-        this.microphone.processAudioFrame(1024);
-        this.audioPlayer.processAudioFrame();
-    }
-}
-```
+## Complete Examples
+
+- [EstuaryVoiceConnection.ts](Examples/EstuaryVoiceConnection.ts): hardware discovery, voice, playback, timeouts and cleanup.
+- [ConversationResults.ts](Examples/ConversationResults.ts): optional task status, endpoint image and citation card.
 
 ## Components
 
@@ -188,31 +157,22 @@ Handles microphone input for voice chat.
 |----------|-------------|
 | `targetCharacter` | Character to send audio to |
 | `sampleRate` | Recording sample rate (16000) |
-| `streamImmediately` | Send audio as received (default: true, lowest latency) |
-| `chunkDurationMs` | Audio chunk size in ms (used when streamImmediately=false) |
-| `vadThreshold` | Voice activity threshold |
+| `isRecording` | Whether microphone capture is active |
 
-### EstuaryAudioPlayer
+### EstuaryPlaybackTracker
 
-Handles playback of AI voice responses.
+Connects `voiceReceived` to `DynamicAudioOutput`, cancels interrupted/redacted audio, and optionally reports completion using a verified playout clock. Call `tick()` from the host update loop. Without a clock it sends no fabricated completion reports.
 
-| Property | Description |
-|----------|-------------|
-| `sampleRate` | Playback sample rate (24000) |
-| `isPlaying` | Whether audio is playing |
-| `autoInterrupt` | Stop on new audio |
+### EstuaryClipPlayer
 
-| Event | Description |
-|-------|-------------|
-| `playbackStarted` | Audio playback begins |
-| `playbackComplete` | Audio playback ends |
+Connects `clientAction` to a native `AnimationPlayer`. It resolves exact clip names or a unique suffix such as `wave` → `preset:biped:wave`.
 
 ## Audio Format
 
 The SDK uses the following audio format:
 
 - **Recording**: 16,000 Hz, Mono, 16-bit PCM
-- **Playback**: 48,000 Hz, Mono, 16-bit PCM
+- **Playback**: 24,000 Hz preferred, Mono, 16-bit PCM (match the negotiated rate)
 - **Encoding**: Base64 for transmission
 
 ## Privacy Considerations
@@ -252,34 +212,22 @@ Low-level WebSocket client with Socket.IO v4 protocol.
 ```typescript
 const client = new EstuaryClient();
 
-await client.connect(serverUrl, apiKey, characterId, playerId);
-await client.sendText('Hello');
-await client.streamAudio(base64Audio);
-await client.disconnect();
+client.connect(serverUrl, apiKey, characterId, playerId);
+// Wait for sessionConnected before sending. Call client.tick() each UpdateEvent.
+client.sendText('Hello');
+client.disconnect();
 ```
 
-### Utilities
+### Additional APIs
 
-```typescript
-import { encodeAudio, decodeAudio } from './Estuary/Utilities/Base64Helper';
-import { floatToPCM16, pcm16ToFloat } from './Estuary/Utilities/AudioConverter';
-
-// Convert audio samples
-const base64 = encodeAudio(floatSamples);
-const samples = decodeAudio(base64);
-```
+Typed event models are exported from `src/Models/ConversationEvents.ts`. `Examples/ConversationResults.ts` shows result cards; `EstuaryHttpClient`, `EstuaryPlaybackTracker`, and `EstuaryClipPlayer` expose rigged generation, playback tracking, and local clip playback.
 
 ## Support
 
 - Documentation: [docs.estuary-ai.com](https://docs.estuary-ai.com)
 - Discord: [discord.gg/estuary](https://discord.gg/estuary)
-- Email: support@estuary-ai.com
+- Email: spencer@estuary-ai.com
 
 ## License
 
 MIT License - see [LICENSE](LICENSE) for details.
-
-
-
-
-

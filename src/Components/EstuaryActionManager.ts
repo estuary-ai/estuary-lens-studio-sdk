@@ -341,12 +341,10 @@ export class EstuaryActionManager extends EventEmitter<any> {
         const eventName = `action:${lowerName}`;
         
         this.on(eventName, handler);
-        this.log(`Subscribed to action '${actionName}'`);
         
         // Return unsubscribe function
         return () => {
             this.off(eventName, handler);
-            this.log(`Unsubscribed from action '${actionName}'`);
         };
     }
     

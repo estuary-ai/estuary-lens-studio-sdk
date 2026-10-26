@@ -31,6 +31,7 @@
     internetModule: false
     micAudioTrack: false
     microphoneRecorderObject: false
+    showPerformanceDiagnostics: false
   ScriptTypesHidden:
     {}
   ReadMe: !<reference> 00000000-0000-0000-0000-000000000000
@@ -45,6 +46,7 @@
       micAudioTrack: !<reference.AudioTrackAsset> 00000000-0000-0000-0000-000000000000
       dynamicAudioOutputObject: !<reference.SceneObject> 00000000-0000-0000-0000-000000000000
       internetModule: !<reference.InternetModule> 00000000-0000-0000-0000-000000000000
+      showPerformanceDiagnostics: false
   ScriptTypes:
     -
       {}
@@ -54,3 +56,4 @@
     - '// @input Asset.AudioTrackAsset micAudioTrack {"hint":"OPTIONAL: direct-mic AudioTrackAsset (bypasses RSG — diagnostic)"}'
     - '// @input SceneObject dynamicAudioOutputObject {"hint":"SceneObject with DynamicAudioOutput script for voice playback"}'
     - '// @input Asset.InternetModule internetModule {"hint":"Connect the InternetModule from your scene"}'
+    - '// @input bool showPerformanceDiagnostics {"hint":"Print audio and update-loop timing once per second"}'

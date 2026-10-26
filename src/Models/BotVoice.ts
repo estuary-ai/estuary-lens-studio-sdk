@@ -4,6 +4,8 @@
 export interface BotVoice {
     /** Base64-encoded audio data */
     audio: string;
+    /** End of the audio stream; playback may still be queued locally. */
+    isFinal?: boolean;
     
     /** Sample rate of the audio in Hz (default: 24000 — matches Estuary's default TTS output rate) */
     sampleRate: number;
@@ -23,6 +25,8 @@ export interface BotVoice {
  */
 interface BotVoiceJson {
     audio?: string;
+    is_final?: boolean;
+    isFinal?: boolean;
     sample_rate?: number;
     sampleRate?: number;
     chunk_index?: number;
@@ -40,6 +44,7 @@ export function parseBotVoice(json: BotVoiceJson): BotVoice {
     const sampleRate = json.sample_rate ?? json.sampleRate ?? 24000;
     return {
         audio: json.audio || '',
+        isFinal: json.is_final ?? json.isFinal ?? false,
         sampleRate: sampleRate > 0 ? sampleRate : 24000,
         chunkIndex: json.chunk_index ?? json.chunkIndex ?? 0,
         messageId: json.message_id || json.messageId || '',

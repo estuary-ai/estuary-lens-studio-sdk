@@ -28,11 +28,12 @@ import { EncounterMessage } from '../Models/EncounterMessage';
 import { EncounterVoice } from '../Models/EncounterVoice';
 import { EncounterEnd } from '../Models/EncounterEnd';
 import { ClientActionEvent } from '../Models/ClientAction';
+import { ConversationEventHandlers, ConversationEvent, ConversationPayloads, conversationWireEvents, VoiceMode } from '../Models/ConversationEvents';
 
 /**
  * Singleton manager for the Estuary SDK in Lens Studio.
  */
-export class EstuaryManager extends EventEmitter<any> {
+export class EstuaryManager extends EventEmitter<ConversationEventHandlers> {
     // Singleton instance
     private static _instance: EstuaryManager | null = null;
 
@@ -174,7 +175,6 @@ export class EstuaryManager extends EventEmitter<any> {
         const key = this.getCharacterKey(character);
         this._registeredCharacters.set(key, character);
 
-        this.log(`Registered character: ${character.characterId} (player: ${character.playerId})`);
 
         // If this is the first character, make it active
         if (!this._activeCharacter) {
@@ -228,13 +228,13 @@ export class EstuaryManager extends EventEmitter<any> {
      * Send a text message to the current character.
      * @param text The message text
      */
-    sendText(text: string): void {
+    sendText(text: string, textOnly?: boolean): void {
         if (!this._client.isConnected) {
             this.logError('Cannot send text: not connected');
             return;
         }
 
-        this._client.sendText(text);
+        this._client.sendText(text, textOnly);
     }
 
     /**
@@ -265,25 +265,25 @@ export class EstuaryManager extends EventEmitter<any> {
     /**
      * Notify the server that audio playback has completed.
      */
-    notifyAudioPlaybackComplete(): void {
+    notifyAudioPlaybackComplete(messageId?: string): void {
         if (!this._client.isConnected) {
             return;
         }
 
-        this._client.notifyAudioPlaybackComplete();
+        this._client.notifyAudioPlaybackComplete(messageId);
     }
 
     /**
      * Start voice mode on the server (enables Deepgram STT).
      * Must be called before streaming audio for speech-to-text.
      */
-    startVoiceMode(): void {
+    startVoiceMode(mode?: VoiceMode): void {
         if (!this._client.isConnected) {
             this.logError('Cannot start voice mode: not connected');
             return;
         }
 
-        this._client.startVoiceMode();
+        this._client.startVoiceMode(mode);
     }
 
     /**
@@ -350,7 +350,7 @@ export class EstuaryManager extends EventEmitter<any> {
     /**
      * Start a stateless 2-character Encounter.
      *
-     * REST POST /api/encounters. Returns ``{encounterId}`` once the server
+     * REST POST /api/v1/encounters. Returns ``{encounterId}`` once the server
      * has launched the background task. The caller must then invoke
      * ``subscribeEncounter(encounterId)`` to receive the streamed turns.
      */
@@ -441,6 +441,17 @@ export class EstuaryManager extends EventEmitter<any> {
         this._client.on('connectionStateChanged', (state: ConnectionState) => this.handleConnectionStateChanged(state));
         this._client.on('cameraCaptureRequest', (request: CameraCaptureRequest) => this.handleCameraCaptureRequest(request));
 
+        const events: ConversationEvent[] = ['serverError', ...Object.keys(conversationWireEvents).map(key => conversationWireEvents[key])];
+        for (const event of events) {
+            this._client.on(event, (data: ConversationPayloads[typeof event]) => {
+                // Apply internal state before invoking application listeners.
+                this._activeCharacter?.handleConversationEvent?.(event, data);
+                this.emit(event, data);
+            });
+        }
+        this._client.on('voiceStarted', (data: any) => this._activeCharacter?.handleVoiceStarted?.(data));
+        this._client.on('voiceStopped', () => this._activeCharacter?.handleVoiceStopped?.());
+        this._client.on('voiceError', (data: any) => this._activeCharacter?.handleVoiceError?.(data));
         this.log('EstuaryManager initialized');
     }
 
@@ -458,56 +469,48 @@ export class EstuaryManager extends EventEmitter<any> {
     // ==================== Event Handlers ====================
 
     private handleSessionConnected(sessionInfo: SessionInfo): void {
-        this.log(`Session connected: ${JSON.stringify(sessionInfo)}`);
         if (this._activeCharacter) {
             this._activeCharacter.handleSessionConnected(sessionInfo);
         }
     }
 
     private handleDisconnected(reason: string): void {
-        this.log(`Disconnected: ${reason}`);
         if (this._activeCharacter) {
             this._activeCharacter.handleDisconnected(reason);
         }
     }
 
     private handleBotResponse(response: BotResponse): void {
-        this.log(`Bot response received`);
         if (this._activeCharacter) {
             this._activeCharacter.handleBotResponse(response);
         }
     }
 
     private handleBotVoice(voice: BotVoice): void {
-        this.log(`Bot voice received: chunk ${voice.chunkIndex}`);
         if (this._activeCharacter) {
             this._activeCharacter.handleBotVoice(voice);
         }
     }
 
     private handleClientAction(action: ClientActionEvent): void {
-        this.log(`Client action received: ${action.name}`);
         if (this._activeCharacter && this._activeCharacter.handleClientAction) {
             this._activeCharacter.handleClientAction(action);
         }
     }
 
     private handleSttResponse(response: SttResponse): void {
-        this.log(`STT response: "${response.text}"`);
         if (this._activeCharacter) {
             this._activeCharacter.handleSttResponse(response);
         }
     }
 
     private handleInterrupt(data: InterruptData): void {
-        this.log(`Interrupt received`);
         if (this._activeCharacter) {
             this._activeCharacter.handleInterrupt(data);
         }
     }
 
     private handleVoiceTimeout(data: any): void {
-        this.log(`Voice released by server (voice_timeout) — socket stays connected`);
         this.emit('voiceTimeout', data);
         if (this._activeCharacter && this._activeCharacter.handleVoiceTimeout) {
             this._activeCharacter.handleVoiceTimeout(data);
@@ -515,7 +518,6 @@ export class EstuaryManager extends EventEmitter<any> {
     }
 
     private handleSessionTimeout(data: any): void {
-        this.log(`Session ended by server (session_timeout) — disconnect follows, no auto-reconnect`);
         this.emit('sessionTimeout', data);
         if (this._activeCharacter && this._activeCharacter.handleSessionTimeout) {
             this._activeCharacter.handleSessionTimeout(data);
@@ -531,7 +533,6 @@ export class EstuaryManager extends EventEmitter<any> {
     }
 
     private handleConnectionStateChanged(state: ConnectionState): void {
-        this.log(`Connection state: ${state}`);
         this.emit('connectionStateChanged', state);
         if (this._activeCharacter) {
             this._activeCharacter.handleConnectionStateChanged(state);
@@ -539,7 +540,6 @@ export class EstuaryManager extends EventEmitter<any> {
     }
 
     private handleCameraCaptureRequest(request: CameraCaptureRequest): void {
-        this.log(`Camera capture request: ${request.request_id}`);
         this.emit('cameraCaptureRequest', request);
         if (this._activeCharacter) {
             this._activeCharacter.handleCameraCaptureRequest(request);
@@ -565,6 +565,10 @@ export class EstuaryManager extends EventEmitter<any> {
 export interface IEstuaryCharacterHandler {
     characterId: string;
     playerId: string;
+    handleConversationEvent?<K extends ConversationEvent>(event: K, data: ConversationPayloads[K]): void;
+    handleVoiceStarted?(data: any): void;
+    handleVoiceError?(data: any): void;
+    handleVoiceStopped?(): void;
     handleSessionConnected(sessionInfo: SessionInfo): void;
     handleDisconnected(reason: string): void;
     handleBotResponse(response: BotResponse): void;
